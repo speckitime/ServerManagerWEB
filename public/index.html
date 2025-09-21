@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ServerManager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
+  <script src="https://unpkg.com/xterm/lib/xterm.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div id="app" class="min-h-screen">
+    <header class="p-4 border-b border-white/10 sticky top-0 backdrop-blur bg-slate-950/70">
+      <div class="max-w-6xl mx-auto flex items-center justify-between">
+        <h1 class="text-xl font-semibold tracking-tight">ServerManager</h1>
+        <div class="flex items-center gap-3 text-sm">
+          <span id="user-email" class="opacity-80">Nicht angemeldet</span>
+          <button id="btn-login" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 transition">Login</button>
+        </div>
+      </div>
+    </header>
+    <main class="max-w-6xl mx-auto grid md:grid-cols-3 gap-4 p-4">
+      <section class="md:col-span-1 space-y-3">
+        <div class="p-3 rounded-2xl bg-white/5 shadow">
+          <h2 class="text-sm uppercase tracking-wider opacity-70">Hosts</h2>
+          <div id="host-list" class="mt-3 space-y-1 text-sm">
+            <p class="opacity-60">Noch keine Hosts angelegt.</p>
+          </div>
+        </div>
+        <div class="p-3 rounded-2xl bg-white/5 shadow">
+          <h2 class="text-sm uppercase tracking-wider opacity-70">Snippets</h2>
+          <div id="snippet-list" class="mt-3 text-sm space-y-2">
+            <p class="opacity-60">Snippet-Bibliothek folgt.</p>
+          </div>
+        </div>
+      </section>
+      <section class="md:col-span-2 p-3 rounded-2xl bg-black/40 shadow">
+        <div id="terminal" class="h-[480px] rounded-xl overflow-hidden border border-white/10"></div>
+        <div class="mt-3 flex gap-2">
+          <button id="btn-connect" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed transition" disabled>Verbinden</button>
+          <button id="btn-share" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 transition">Share-Link</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <template id="login-template">
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur flex items-center justify-center z-50">
+      <form class="w-full max-w-sm bg-slate-900/90 rounded-2xl p-6 shadow-lg space-y-4" id="login-form">
+        <div class="space-y-1">
+          <h2 class="text-lg font-semibold">Anmelden</h2>
+          <p class="text-sm opacity-70">Mit E-Mail, Passwort und ggf. TOTP-Code anmelden.</p>
+        </div>
+        <label class="space-y-1 text-sm block">
+          <span class="opacity-80">E-Mail</span>
+          <input type="email" name="email" required class="w-full rounded-xl bg-slate-800/80 border border-white/10 px-3 py-2 focus:outline-none focus:ring focus:ring-sky-500" />
+        </label>
+        <label class="space-y-1 text-sm block">
+          <span class="opacity-80">Passwort</span>
+          <input type="password" name="password" required class="w-full rounded-xl bg-slate-800/80 border border-white/10 px-3 py-2 focus:outline-none focus:ring focus:ring-sky-500" />
+        </label>
+        <label class="space-y-1 text-sm block">
+          <span class="opacity-80">TOTP (optional)</span>
+          <input type="text" name="totp" inputmode="numeric" pattern="[0-9]{6}" class="w-full rounded-xl bg-slate-800/80 border border-white/10 px-3 py-2 focus:outline-none focus:ring focus:ring-sky-500" />
+        </label>
+        <button type="submit" class="w-full py-2 rounded-xl bg-sky-500 hover:bg-sky-400 transition text-slate-950 font-semibold">Login</button>
+      </form>
+    </div>
+  </template>
+  <script>
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: 'JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      theme: {
+        background: '#0f172a',
+        foreground: '#e2e8f0'
+      }
+    });
+    term.open(document.getElementById('terminal'));
+
+    let socket = null;
+    let currentHost = null;
+    let selectedHostId = null;
+    let terminalDataDisposable = null;
+    const hosts = [];
+
+    function renderHosts() {
+      const container = document.getElementById('host-list');
+      container.textContent = '';
+      if (!hosts.length) {
+        selectedHostId = null;
+        currentHost = null;
+        document.getElementById('btn-connect').disabled = true;
+        const placeholder = document.createElement('p');
+        placeholder.className = 'opacity-60';
+        placeholder.textContent = 'Noch keine Hosts angelegt.';
+        container.appendChild(placeholder);
+        return;
+      }
+
+      hosts.forEach((host) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'w-full text-left px-3 py-2 rounded-xl transition flex justify-between hover:bg-white/10 border border-transparent';
+        button.dataset.hostId = host.id;
+        button.textContent = host.name;
+
+        const applyState = () => {
+          if (selectedHostId === host.id) {
+            button.classList.add('bg-sky-500/20', 'border-sky-400/40');
+            button.classList.remove('bg-white/5', 'border-transparent');
+          } else {
+            button.classList.add('bg-white/5', 'border-transparent');
+            button.classList.remove('bg-sky-500/20', 'border-sky-400/40');
+          }
+        };
+
+        button.addEventListener('click', () => {
+          selectedHostId = host.id;
+          currentHost = host.id;
+          document.getElementById('btn-connect').disabled = false;
+          document.querySelectorAll('#host-list button').forEach((btn) => {
+            if (btn.dataset.hostId) {
+              btn.classList.remove('bg-sky-500/20', 'border-sky-400/40');
+              btn.classList.add('bg-white/5', 'border-transparent');
+            }
+          });
+          applyState();
+        });
+
+        applyState();
+        container.appendChild(button);
+      });
+    }
+
+    async function fetchHosts() {
+      const response = await fetch('/api/hosts', { credentials: 'include' });
+      if (!response.ok) {
+        return;
+      }
+      const data = await response.json();
+      hosts.splice(0, hosts.length, ...data.hosts);
+      renderHosts();
+      setFirstHostAsDefault();
+    }
+
+    renderHosts();
+    fetchHosts();
+
+    function setFirstHostAsDefault() {
+      if (hosts.length && selectedHostId === null) {
+        selectedHostId = hosts[0].id;
+        currentHost = hosts[0].id;
+        document.getElementById('btn-connect').disabled = false;
+        renderHosts();
+      }
+    }
+
+    function openLoginModal() {
+      const tpl = document.getElementById('login-template');
+      const clone = tpl.content.firstElementChild.cloneNode(true);
+      const form = clone.querySelector('#login-form');
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const data = Object.fromEntries(new FormData(form).entries());
+
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(data)
+        });
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: 'unknown' }));
+          alert('Login fehlgeschlagen: ' + (error.message || error.error));
+          return;
+        }
+
+        document.body.removeChild(clone);
+        document.getElementById('user-email').textContent = data.email;
+        document.getElementById('btn-connect').disabled = false;
+        fetchHosts();
+      });
+
+      clone.addEventListener('click', (event) => {
+        if (event.target === clone) {
+          document.body.removeChild(clone);
+        }
+      });
+
+      document.body.appendChild(clone);
+    }
+
+    document.getElementById('btn-login').addEventListener('click', openLoginModal);
+
+    document.getElementById('btn-share').addEventListener('click', () => {
+      alert('Session-Sharing folgt in einem späteren Release.');
+    });
+
+    document.getElementById('btn-connect').addEventListener('click', async () => {
+      if (!currentHost) {
+        alert('Bitte Host auswählen (UI folgt).');
+        return;
+      }
+
+      if (socket) {
+        socket.close();
+      }
+
+      const response = await fetch(`/api/hosts/${currentHost}/token`, { credentials: 'include' });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'unknown' }));
+        alert('Token konnte nicht angefordert werden: ' + (error.error || 'Fehler'));
+        return;
+      }
+
+      const { token, wsUrl } = await response.json();
+      const url = new URL(wsUrl, window.location.href);
+      url.searchParams.set('token', token);
+
+      socket = new WebSocket(url);
+      socket.binaryType = 'arraybuffer';
+
+      socket.addEventListener('open', () => {
+        term.focus();
+        term.write('\u001b[32mVerbunden\u001b[0m\r\n');
+      });
+      socket.addEventListener('message', (event) => {
+        const data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+        term.write(data);
+      });
+      socket.addEventListener('error', () => {
+        term.write('\r\n\u001b[31mWebSocket-Fehler\u001b[0m\r\n');
+      });
+      socket.addEventListener('close', () => {
+        term.write('\r\n\u001b[31mVerbindung getrennt\u001b[0m\r\n');
+        if (terminalDataDisposable) {
+          terminalDataDisposable.dispose();
+          terminalDataDisposable = null;
+        }
+        socket = null;
+      });
+
+      if (terminalDataDisposable) {
+        terminalDataDisposable.dispose();
+      }
+
+      terminalDataDisposable = term.onData((data) => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(data);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
