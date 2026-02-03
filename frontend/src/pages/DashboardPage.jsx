@@ -296,3 +296,64 @@ const ActivityItem = ({ activity }) => {
     </div>
   );
 };
+
+const AlertStatCard = ({ alertCounts }) => {
+  const hasCritical = alertCounts.critical > 0;
+  const hasWarning = alertCounts.warning > 0;
+  const hasAlerts = alertCounts.total > 0;
+
+  return (
+    <Card className={cn(
+      "metric-card hover:border-primary/50 transition-colors cursor-pointer",
+      hasCritical && "border-destructive/50 animate-pulse"
+    )} data-testid="stat-alerts">
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+              Active Alerts
+            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className={cn(
+                "font-mono text-3xl font-bold",
+                hasCritical ? "text-destructive" : hasWarning ? "text-warning" : "text-online"
+              )}>
+                {alertCounts.total}
+              </span>
+              {hasCritical && (
+                <Badge variant="danger" className="animate-pulse">
+                  {alertCounts.critical} Critical
+                </Badge>
+              )}
+            </div>
+          </div>
+          <div className={cn(
+            "p-3 rounded-sm",
+            hasCritical ? "bg-destructive/20 text-destructive" : 
+            hasWarning ? "bg-warning/20 text-warning" : 
+            hasAlerts ? "bg-blue-500/20 text-blue-400" : "bg-online/20 text-online"
+          )}>
+            {hasCritical ? (
+              <AlertCircle className="w-6 h-6" />
+            ) : (
+              <Bell className="w-6 h-6" />
+            )}
+          </div>
+        </div>
+        {hasAlerts && (
+          <div className="flex gap-2 mt-2">
+            {alertCounts.critical > 0 && (
+              <span className="text-xs font-mono text-destructive">{alertCounts.critical} critical</span>
+            )}
+            {alertCounts.warning > 0 && (
+              <span className="text-xs font-mono text-warning">{alertCounts.warning} warning</span>
+            )}
+            {alertCounts.info > 0 && (
+              <span className="text-xs font-mono text-blue-400">{alertCounts.info} info</span>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
