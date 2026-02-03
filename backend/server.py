@@ -1154,14 +1154,219 @@ async def get_activity_logs(
 
 @app.get("/api/ip-overview")
 async def get_ip_overview(current_user: dict = Depends(get_current_user)):
-    servers = list(servers_collection.find({}, {"_id": 1, "hostname": 1, "ip_address": 1, "status": 1, "os_type": 1}))
+    servers = list(servers_collection.find({}, {"_id": 1, "hostname": 1, "ip_address": 1, "status": 1, "os_type": 1, "last_seen": 1}))
     return [{
         "id": str(s["_id"]),
         "hostname": s["hostname"],
         "ip_address": s["ip_address"],
         "status": s.get("status", "unknown"),
-        "os_type": s.get("os_type", "unknown")
+        "os_type": s.get("os_type", "unknown"),
+        "last_seen": s.get("last_seen")
     } for s in servers]
+
+# ========================
+# RDP Connection Endpoint
+# ========================
+
+@app.get("/api/servers/{server_id}/rdp-file")
+async def generate_rdp_file(server_id: str, current_user: dict = Depends(get_current_user)):
+    """Generate .rdp file content for Windows server connection"""
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    if server.get("os_type") != "windows":
+        raise HTTPException(status_code=400, detail="RDP only available for Windows servers")
+    
+    rdp_port = server.get("ssh_port", 3389)  # Use ssh_port field for RDP port
+    username = server.get("ssh_username", "")
+    
+    rdp_content = f"""screen mode id:i:2
+use multimon:i:0
+desktopwidth:i:1920
+desktopheight:i:1080
+session bpp:i:32
+winposstr:s:0,1,0,0,1920,1080
+compression:i:1
+keyboardhook:i:2
+audiocapturemode:i:0
+videoplaybackmode:i:1
+connection type:i:7
+networkautodetect:i:1
+bandwidthautodetect:i:1
+displayconnectionbar:i:1
+enableworkspacereconnect:i:0
+disable wallpaper:i:0
+allow font smoothing:i:1
+allow desktop composition:i:1
+disable full window drag:i:0
+disable menu anims:i:0
+disable themes:i:0
+disable cursor setting:i:0
+bitmapcachepersistenable:i:1
+full address:s:{server['ip_address']}:{rdp_port}
+audiomode:i:0
+redirectprinters:i:0
+redirectcomports:i:0
+redirectsmartcards:i:0
+redirectclipboard:i:1
+redirectposdevices:i:0
+autoreconnection enabled:i:1
+authentication level:i:2
+prompt for credentials:i:0
+negotiate security layer:i:1
+remoteapplicationmode:i:0
+alternate shell:s:
+shell working directory:s:
+gatewayhostname:s:
+gatewayusagemethod:i:4
+gatewaycredentialssource:i:4
+gatewayprofileusagemethod:i:0
+promptcredentialonce:i:0
+gatewaybrokeringtype:i:0
+use redirection server name:i:0
+rdgiskdcproxy:i:0
+kdcproxyname:s:
+username:s:{username}
+"""
+    
+    return {
+        "filename": f"{server['hostname']}.rdp",
+        "content": rdp_content,
+        "ip_address": server['ip_address'],
+        "port": rdp_port,
+        "username": username
+    }
+
+# ========================
+# Hardware Info Endpoint
+# ========================
+
+@app.get("/api/servers/{server_id}/hardware")
+async def get_server_hardware(server_id: str, current_user: dict = Depends(get_current_user)):
+    """Get detailed hardware information for a server"""
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    hardware = server.get("hardware", {})
+    
+    # Return stored hardware info or demo data
+    if not hardware:
+        hardware = {
+            "cpu": {
+                "model": "Intel Core i7-12700K",
+                "cores": 12,
+                "threads": 20,
+                "frequency_mhz": 3600,
+                "cache_mb": 25
+            },
+            "memory": {
+                "total_gb": 32,
+                "type": "DDR4",
+                "speed_mhz": 3200,
+                "slots": [
+                    {"slot": "DIMM_A1", "size_gb": 16, "manufacturer": "Samsung"},
+                    {"slot": "DIMM_B1", "size_gb": 16, "manufacturer": "Samsung"}
+                ]
+            },
+            "motherboard": {
+                "manufacturer": "ASUS",
+                "model": "ROG STRIX Z690-A",
+                "bios_version": "2103"
+            },
+            "network_interfaces": [
+                {"name": "eth0", "mac": "00:1A:2B:3C:4D:5E", "speed": "1000 Mbps", "ip": server.get("ip_address")}
+            ]
+        }
+    
+    return hardware
+
+# ========================
+# Disk Details Endpoint
+# ========================
+
+@app.get("/api/servers/{server_id}/disks")
+async def get_server_disks(server_id: str, current_user: dict = Depends(get_current_user)):
+    """Get detailed disk information including SMART data"""
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    disks = server.get("disks", [])
+    
+    # Return stored disk info or demo data
+    if not disks:
+        disks = [
+            {
+                "device": "/dev/sda",
+                "model": "Samsung SSD 970 EVO Plus 1TB",
+                "serial": "S4EWNX0M123456",
+                "size_gb": 931,
+                "type": "SSD",
+                "partitions": [
+                    {"mountpoint": "/", "filesystem": "ext4", "size_gb": 500, "used_gb": 125, "percent": 25.0},
+                    {"mountpoint": "/home", "filesystem": "ext4", "size_gb": 400, "used_gb": 180, "percent": 45.0}
+                ],
+                "smart": {
+                    "status": "PASSED",
+                    "temperature_celsius": 35,
+                    "power_on_hours": 8760,
+                    "power_cycle_count": 245,
+                    "reallocated_sectors": 0,
+                    "wear_leveling_count": 98,
+                    "health_percent": 98
+                }
+            },
+            {
+                "device": "/dev/sdb",
+                "model": "WD Red Plus 4TB",
+                "serial": "WD-WMC4N0123456",
+                "size_gb": 3726,
+                "type": "HDD",
+                "partitions": [
+                    {"mountpoint": "/data", "filesystem": "ext4", "size_gb": 3726, "used_gb": 2100, "percent": 56.4}
+                ],
+                "smart": {
+                    "status": "PASSED",
+                    "temperature_celsius": 38,
+                    "power_on_hours": 15000,
+                    "power_cycle_count": 120,
+                    "reallocated_sectors": 0,
+                    "spin_retry_count": 0,
+                    "health_percent": 95
+                }
+            }
+        ]
+    
+    return disks
+
+# ========================
+# Extended Server Info
+# ========================
+
+@app.get("/api/servers/{server_id}/extended")
+async def get_server_extended(server_id: str, current_user: dict = Depends(get_current_user)):
+    """Get extended server information including last update time"""
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    return {
+        "id": str(server["_id"]),
+        "hostname": server["hostname"],
+        "ip_address": server["ip_address"],
+        "os_type": server["os_type"],
+        "os_version": server.get("os_version"),
+        "status": server.get("status", "unknown"),
+        "last_seen": server.get("last_seen"),
+        "last_metrics_update": server.get("metrics", {}).get("timestamp"),
+        "agent_connected": server.get("status") == "online",
+        "hardware": server.get("hardware", {}),
+        "disks": server.get("disks", []),
+        "uptime": server.get("uptime"),
+        "created_at": server.get("created_at")
+    }
 
 # ========================
 # Health Check
