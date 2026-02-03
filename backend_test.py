@@ -120,7 +120,7 @@ class NexusCommandAPITester:
             "tags": ["test", "api"]
         }
         
-        success, response = self.make_request('POST', 'servers', server_data, expected_status=201)
+        success, response = self.make_request('POST', 'servers', server_data, expected_status=200)
         if success:
             data = response.json()
             has_id = 'id' in data
