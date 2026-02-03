@@ -68,7 +68,7 @@ export default function DashboardPage() {
     <Layout title="Dashboard">
       <div className="space-y-6">
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <StatCard
             title="Total Servers"
             value={stats?.total_servers || 0}
@@ -97,6 +97,9 @@ export default function DashboardPage() {
             color="warning"
             testId="stat-updates"
           />
+          <Link to="/alerts" className="block">
+            <AlertStatCard alertCounts={alertCounts} />
+          </Link>
         </div>
 
         {/* Main Content Grid */}
