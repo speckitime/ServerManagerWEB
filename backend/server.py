@@ -1908,9 +1908,19 @@ async def create_alert_rule(rule: AlertRuleCreate, current_user: dict = Depends(
     rule_data["created_at"] = datetime.now(timezone.utc).isoformat()
     
     result = alert_rules_collection.insert_one(rule_data)
-    rule_data["id"] = str(result.inserted_id)
     
-    return rule_data
+    # Return clean response without MongoDB _id
+    return {
+        "id": str(result.inserted_id),
+        "name": rule_data["name"],
+        "metric_type": rule_data["metric_type"],
+        "comparison": rule_data.get("comparison", "gt"),
+        "threshold": rule_data["threshold"],
+        "severity": rule_data["severity"],
+        "server_ids": rule_data.get("server_ids", []),
+        "enabled": rule_data["enabled"],
+        "created_at": rule_data["created_at"]
+    }
 
 @app.put("/api/alert-rules/{rule_id}")
 async def update_alert_rule(rule_id: str, update: AlertRuleUpdate, current_user: dict = Depends(get_current_user)):
