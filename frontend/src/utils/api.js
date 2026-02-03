@@ -57,7 +57,12 @@ export const serverAPI = {
   getLogs: (id) => api.get(`/api/servers/${id}/logs`),
   getLogContent: (id, filename, lines) => api.get(`/api/servers/${id}/logs/${filename}`, { params: { lines } }),
   getDocumentation: (id) => api.get(`/api/servers/${id}/documentation`),
-  updateDocumentation: (id, content, contentType) => api.put(`/api/servers/${id}/documentation`, { content, content_type: contentType })
+  updateDocumentation: (id, content, contentType) => api.put(`/api/servers/${id}/documentation`, { content, content_type: contentType }),
+  // New extended APIs
+  getHardware: (id) => api.get(`/api/servers/${id}/hardware`),
+  getDisks: (id) => api.get(`/api/servers/${id}/disks`),
+  getExtended: (id) => api.get(`/api/servers/${id}/extended`),
+  getRdpFile: (id) => api.get(`/api/servers/${id}/rdp-file`)
 };
 
 // Task APIs
