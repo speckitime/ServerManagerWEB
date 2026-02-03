@@ -698,13 +698,15 @@ async def get_log_content(
     current_user: dict = Depends(get_current_user)
 ):
     # Mock log content
-    log_lines = [
-        f"2024-01-15 10:23:{i:02d} INFO Server started successfully",
-        f"2024-01-15 10:24:{i:02d} DEBUG Processing request from 192.168.1.50",
-        f"2024-01-15 10:25:{i:02d} WARN High memory usage detected: 85%",
-        f"2024-01-15 10:26:{i:02d} INFO Connection established to database",
-        f"2024-01-15 10:27:{i:02d} ERROR Failed to connect to remote service"
-    ]
+    log_lines = []
+    for i in range(min(lines, 50)):
+        log_lines.extend([
+            f"2024-01-15 10:23:{i:02d} INFO Server started successfully",
+            f"2024-01-15 10:24:{i:02d} DEBUG Processing request from 192.168.1.50",
+            f"2024-01-15 10:25:{i:02d} WARN High memory usage detected: 85%",
+            f"2024-01-15 10:26:{i:02d} INFO Connection established to database",
+            f"2024-01-15 10:27:{i:02d} ERROR Failed to connect to remote service"
+        ])
     return {"filename": filename, "content": "\n".join(log_lines[:lines])}
 
 # ========================
