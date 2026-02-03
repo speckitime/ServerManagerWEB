@@ -109,9 +109,10 @@
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
-- [ ] Main install.sh deployment script (for production setup)
-- [ ] Agent installer scripts (linux/install.sh, windows/install.ps1)
-- [ ] Documentation files (INSTALLATION.md, USER_GUIDE.md, API.md)
+- [x] Main install.sh deployment script (COMPLETED - 2026-02-03)
+- [x] Agent installer scripts (COMPLETED - 2026-02-03)
+- [x] Documentation files (COMPLETED - 2026-02-03)
+- [x] Alert Badge on Dashboard (COMPLETED - 2026-02-03)
 
 ### P1 - High Priority
 - [ ] Task execution results display
