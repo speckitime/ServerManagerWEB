@@ -252,6 +252,15 @@ export default function ServerDetailPage() {
           )}
         </Tabs>
       </div>
+
+      {/* SSH Terminal Modal */}
+      {server && server.os_type === 'linux' && (
+        <SSHTerminal
+          isOpen={showSSHTerminal}
+          onClose={() => setShowSSHTerminal(false)}
+          server={server}
+        />
+      )}
     </Layout>
   );
 }
