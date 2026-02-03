@@ -170,6 +170,32 @@ class ServerGroupResponse(BaseModel):
     color: str
     server_count: int = 0
 
+class DiskInfo(BaseModel):
+    device: str
+    mountpoint: str
+    fstype: str
+    total: int
+    used: int
+    free: int
+    percent: float
+    serial: Optional[str] = None
+    model: Optional[str] = None
+    smart_status: Optional[str] = None
+    smart_data: Optional[dict] = None
+
+class HardwareInfo(BaseModel):
+    cpu_model: Optional[str] = None
+    cpu_cores: Optional[int] = None
+    cpu_threads: Optional[int] = None
+    cpu_freq_mhz: Optional[float] = None
+    ram_total: Optional[int] = None
+    ram_type: Optional[str] = None
+    ram_speed: Optional[str] = None
+    ram_slots: Optional[List[dict]] = None
+    motherboard: Optional[str] = None
+    bios_version: Optional[str] = None
+    network_interfaces: Optional[List[dict]] = None
+
 class MetricsData(BaseModel):
     server_id: str
     cpu_percent: float
@@ -182,6 +208,9 @@ class MetricsData(BaseModel):
     network_bytes_sent: int
     network_bytes_recv: int
     processes: List[dict] = []
+    disks: Optional[List[dict]] = None
+    hardware: Optional[dict] = None
+    timestamp: Optional[str] = None
 
 class TaskBase(BaseModel):
     name: str
