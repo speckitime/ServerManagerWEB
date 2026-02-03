@@ -1772,6 +1772,356 @@ async def unsubscribe_server(sid, data):
         await sio.leave_room(sid, f"server_{server_id}")
 
 # ========================
+# Alert Endpoints
+# ========================
+
+@app.get("/api/alerts")
+async def list_alerts(
+    status: Optional[str] = None,
+    server_id: Optional[str] = None,
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user)
+):
+    """List all alerts"""
+    query = {}
+    if status:
+        query["status"] = status
+    if server_id:
+        query["server_id"] = server_id
+    
+    alerts = list(alerts_collection.find(query).sort("created_at", DESCENDING).limit(limit))
+    return [{
+        "id": str(a["_id"]),
+        "server_id": a["server_id"],
+        "hostname": a.get("hostname"),
+        "alert_type": a["alert_type"],
+        "severity": a["severity"],
+        "message": a["message"],
+        "status": a["status"],
+        "created_at": a["created_at"],
+        "acknowledged": a.get("acknowledged", False),
+        "acknowledged_by": a.get("acknowledged_by"),
+        "resolved_at": a.get("resolved_at")
+    } for a in alerts]
+
+@app.get("/api/alerts/active-count")
+async def get_active_alerts_count(current_user: dict = Depends(get_current_user)):
+    """Get count of active alerts by severity"""
+    critical = alerts_collection.count_documents({"status": "active", "severity": "critical"})
+    warning = alerts_collection.count_documents({"status": "active", "severity": "warning"})
+    info = alerts_collection.count_documents({"status": "active", "severity": "info"})
+    
+    return {
+        "total": critical + warning + info,
+        "critical": critical,
+        "warning": warning,
+        "info": info
+    }
+
+@app.put("/api/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: str, current_user: dict = Depends(get_current_user)):
+    """Acknowledge an alert"""
+    result = alerts_collection.update_one(
+        {"_id": ObjectId(alert_id)},
+        {
+            "$set": {
+                "acknowledged": True,
+                "acknowledged_by": current_user["id"],
+                "acknowledged_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    return {"message": "Alert acknowledged"}
+
+@app.put("/api/alerts/{alert_id}/resolve")
+async def resolve_alert(alert_id: str, current_user: dict = Depends(get_current_user)):
+    """Resolve an alert"""
+    result = alerts_collection.update_one(
+        {"_id": ObjectId(alert_id)},
+        {
+            "$set": {
+                "status": "resolved",
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
+                "resolved_by": current_user["id"]
+            }
+        }
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    return {"message": "Alert resolved"}
+
+@app.delete("/api/alerts/{alert_id}")
+async def delete_alert(alert_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete an alert"""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    result = alerts_collection.delete_one({"_id": ObjectId(alert_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    return {"message": "Alert deleted"}
+
+# ========================
+# Alert Rules Endpoints
+# ========================
+
+@app.get("/api/alert-rules")
+async def list_alert_rules(current_user: dict = Depends(get_current_user)):
+    """List all alert rules"""
+    rules = list(alert_rules_collection.find())
+    return [{
+        "id": str(r["_id"]),
+        "name": r["name"],
+        "metric_type": r["metric_type"],
+        "comparison": r.get("comparison", "gt"),
+        "threshold": r["threshold"],
+        "severity": r["severity"],
+        "server_ids": r.get("server_ids", []),
+        "enabled": r["enabled"],
+        "created_at": r.get("created_at")
+    } for r in rules]
+
+@app.post("/api/alert-rules")
+async def create_alert_rule(rule: AlertRuleCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new alert rule"""
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    rule_data = rule.model_dump()
+    rule_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    
+    result = alert_rules_collection.insert_one(rule_data)
+    rule_data["id"] = str(result.inserted_id)
+    
+    return rule_data
+
+@app.put("/api/alert-rules/{rule_id}")
+async def update_alert_rule(rule_id: str, update: AlertRuleUpdate, current_user: dict = Depends(get_current_user)):
+    """Update an alert rule"""
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    
+    result = alert_rules_collection.update_one(
+        {"_id": ObjectId(rule_id)},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Alert rule not found")
+    
+    rule = alert_rules_collection.find_one({"_id": ObjectId(rule_id)})
+    return {
+        "id": str(rule["_id"]),
+        "name": rule["name"],
+        "metric_type": rule["metric_type"],
+        "comparison": rule.get("comparison", "gt"),
+        "threshold": rule["threshold"],
+        "severity": rule["severity"],
+        "server_ids": rule.get("server_ids", []),
+        "enabled": rule["enabled"]
+    }
+
+@app.delete("/api/alert-rules/{rule_id}")
+async def delete_alert_rule(rule_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete an alert rule"""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    result = alert_rules_collection.delete_one({"_id": ObjectId(rule_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Alert rule not found")
+    
+    return {"message": "Alert rule deleted"}
+
+# ========================
+# SMTP Configuration
+# ========================
+
+@app.get("/api/settings/smtp")
+async def get_smtp_settings(current_user: dict = Depends(get_current_user)):
+    """Get SMTP configuration (admin only)"""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    return {
+        "smtp_host": settings.SMTP_HOST,
+        "smtp_port": settings.SMTP_PORT,
+        "smtp_user": settings.SMTP_USER,
+        "smtp_from": settings.SMTP_FROM,
+        "alert_email_to": settings.ALERT_EMAIL_TO,
+        "configured": bool(settings.SMTP_HOST)
+    }
+
+@app.post("/api/settings/smtp/test")
+async def test_smtp_settings(current_user: dict = Depends(get_current_user)):
+    """Send a test email to verify SMTP configuration"""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    if not settings.SMTP_HOST or not settings.ALERT_EMAIL_TO:
+        raise HTTPException(status_code=400, detail="SMTP not configured")
+    
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = settings.SMTP_FROM or settings.SMTP_USER
+        msg['To'] = settings.ALERT_EMAIL_TO
+        msg['Subject'] = "[Nexus Command] Test Email"
+        
+        body = "This is a test email from Nexus Command. If you received this, your SMTP configuration is working correctly."
+        msg.attach(MIMEText(body, 'plain'))
+        
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            server.starttls()
+            if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.send_message(msg)
+        
+        return {"message": "Test email sent successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send test email: {str(e)}")
+
+# ========================
+# SSH Terminal Endpoints
+# ========================
+
+@app.post("/api/servers/{server_id}/ssh/connect")
+async def ssh_connect(server_id: str, request: SSHConnectRequest, current_user: dict = Depends(get_current_user)):
+    """Initiate SSH connection to a server"""
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    if paramiko is None:
+        raise HTTPException(status_code=500, detail="SSH not available (paramiko not installed)")
+    
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    if server.get("os_type") != "linux":
+        raise HTTPException(status_code=400, detail="SSH only available for Linux servers")
+    
+    # Generate connection ID
+    connection_id = secrets.token_urlsafe(16)
+    
+    # Try to connect
+    success = await ssh_manager.connect(
+        connection_id=connection_id,
+        hostname=server["ip_address"],
+        port=server.get("ssh_port", 22),
+        username=request.username,
+        password=request.password
+    )
+    
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to establish SSH connection")
+    
+    log_activity(current_user["id"], "ssh_connected", {"server_id": server_id, "hostname": server["hostname"]})
+    
+    return {
+        "connection_id": connection_id,
+        "message": "SSH connection established"
+    }
+
+@app.post("/api/ssh/{connection_id}/send")
+async def ssh_send(connection_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Send data to SSH session"""
+    if not ssh_manager.is_connected(connection_id):
+        raise HTTPException(status_code=400, detail="SSH connection not found")
+    
+    input_data = data.get("input", "")
+    ssh_manager.send_command(connection_id, input_data)
+    
+    return {"status": "sent"}
+
+@app.get("/api/ssh/{connection_id}/read")
+async def ssh_read(connection_id: str, current_user: dict = Depends(get_current_user)):
+    """Read output from SSH session"""
+    if not ssh_manager.is_connected(connection_id):
+        raise HTTPException(status_code=400, detail="SSH connection not found")
+    
+    output = ssh_manager.read_output(connection_id)
+    
+    return {"output": output}
+
+@app.post("/api/ssh/{connection_id}/disconnect")
+async def ssh_disconnect(connection_id: str, current_user: dict = Depends(get_current_user)):
+    """Disconnect SSH session"""
+    ssh_manager.disconnect(connection_id)
+    
+    return {"message": "SSH connection closed"}
+
+@app.post("/api/ssh/{connection_id}/resize")
+async def ssh_resize(connection_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Resize SSH terminal"""
+    if not ssh_manager.is_connected(connection_id):
+        raise HTTPException(status_code=400, detail="SSH connection not found")
+    
+    cols = data.get("cols", 80)
+    rows = data.get("rows", 24)
+    
+    try:
+        if connection_id in ssh_manager.channels:
+            ssh_manager.channels[connection_id].resize_pty(width=cols, height=rows)
+    except:
+        pass
+    
+    return {"status": "resized"}
+
+# WebSocket for SSH Terminal
+@app.websocket("/api/ws/ssh/{connection_id}")
+async def ssh_websocket(websocket: WebSocket, connection_id: str):
+    """WebSocket endpoint for real-time SSH communication"""
+    await websocket.accept()
+    
+    if not ssh_manager.is_connected(connection_id):
+        await websocket.close(code=4000)
+        return
+    
+    try:
+        while True:
+            # Check for input from client
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
+                message = json.loads(data)
+                
+                if message.get("type") == "input":
+                    ssh_manager.send_command(connection_id, message.get("data", ""))
+                elif message.get("type") == "resize":
+                    cols = message.get("cols", 80)
+                    rows = message.get("rows", 24)
+                    if connection_id in ssh_manager.channels:
+                        try:
+                            ssh_manager.channels[connection_id].resize_pty(width=cols, height=rows)
+                        except:
+                            pass
+            except asyncio.TimeoutError:
+                pass
+            
+            # Read output and send to client
+            output = ssh_manager.read_output(connection_id)
+            if output:
+                await websocket.send_json({"type": "output", "data": output})
+            
+            # Check if connection is still alive
+            if not ssh_manager.is_connected(connection_id):
+                await websocket.send_json({"type": "disconnected"})
+                break
+            
+            await asyncio.sleep(0.05)
+            
+    except WebSocketDisconnect:
+        pass
+    finally:
+        ssh_manager.disconnect(connection_id)
+
+# ========================
 # Run with Socket.IO
 # ========================
 
