@@ -299,13 +299,25 @@ class AlertManager:
         }))
     
     def _send_email_alert(self, alert: dict):
-        if not settings.SMTP_HOST or not settings.ALERT_EMAIL_TO:
+        # Get SMTP config from database
+        smtp_config = db["smtp_config"].find_one({}, {"_id": 0})
+        if not smtp_config:
+            smtp_config = {
+                "smtp_host": settings.SMTP_HOST,
+                "smtp_port": settings.SMTP_PORT,
+                "smtp_user": settings.SMTP_USER,
+                "smtp_password": settings.SMTP_PASSWORD,
+                "smtp_from": settings.SMTP_FROM,
+                "alert_email_to": settings.ALERT_EMAIL_TO
+            }
+        
+        if not smtp_config.get("smtp_host") or not smtp_config.get("alert_email_to"):
             return
         
         try:
             msg = MIMEMultipart()
-            msg['From'] = settings.SMTP_FROM or settings.SMTP_USER
-            msg['To'] = settings.ALERT_EMAIL_TO
+            msg['From'] = smtp_config.get("smtp_from") or smtp_config.get("smtp_user")
+            msg['To'] = smtp_config.get("alert_email_to")
             msg['Subject'] = f"[Nexus Command] {alert['severity'].upper()}: {alert['hostname']} - {alert['alert_type']}"
             
             body = f"""
@@ -322,10 +334,10 @@ Nexus Command Server Management System
             """
             msg.attach(MIMEText(body, 'plain'))
             
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            with smtplib.SMTP(smtp_config.get("smtp_host"), smtp_config.get("smtp_port", 587)) as server:
                 server.starttls()
-                if settings.SMTP_USER and settings.SMTP_PASSWORD:
-                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                if smtp_config.get("smtp_user") and smtp_config.get("smtp_password"):
+                    server.login(smtp_config.get("smtp_user"), smtp_config.get("smtp_password"))
                 server.send_message(msg)
         except Exception as e:
             print(f"Failed to send alert email: {e}")
