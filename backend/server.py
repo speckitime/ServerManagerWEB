@@ -738,9 +738,47 @@ async def lifespan(app: FastAPI):
             "next_run": None
         })
     
+    # Create default alert rules
+    default_rules = alert_rules_collection.find_one({"name": "High CPU Usage"})
+    if not default_rules:
+        alert_rules_collection.insert_one({
+            "name": "High CPU Usage",
+            "metric_type": "cpu",
+            "comparison": "gt",
+            "threshold": 90.0,
+            "severity": "warning",
+            "server_ids": [],
+            "enabled": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+        alert_rules_collection.insert_one({
+            "name": "High Memory Usage",
+            "metric_type": "memory",
+            "comparison": "gt",
+            "threshold": 90.0,
+            "severity": "warning",
+            "server_ids": [],
+            "enabled": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+        alert_rules_collection.insert_one({
+            "name": "Disk Space Critical",
+            "metric_type": "disk",
+            "comparison": "gt",
+            "threshold": 95.0,
+            "severity": "critical",
+            "server_ids": [],
+            "enabled": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+    
+    # Start alert manager
+    alert_manager.start()
+    
     yield
     
     # Cleanup
+    alert_manager.stop()
     client.close()
 
 # ========================
