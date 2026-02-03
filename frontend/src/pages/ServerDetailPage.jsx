@@ -56,6 +56,7 @@ import {
   TableCell,
   Textarea
 } from '../components/ui';
+import { SSHTerminal } from '../components/ssh/SSHTerminal';
 import { serverAPI } from '../utils/api';
 import { formatBytes, formatRelativeTime, getSeverityColor, cn } from '../utils/helpers';
 import { useToast } from '../hooks/use-toast';
