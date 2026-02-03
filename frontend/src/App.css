@@ -1,0 +1,204 @@
+/* Nexus Command - Custom Styles */
+
+/* Status indicators */
+.status-online {
+  background-color: #22C55E;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+}
+
+.status-offline {
+  background-color: #EF4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+}
+
+.status-warning {
+  background-color: #EAB308;
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.6);
+}
+
+.status-unknown {
+  background-color: #6B7280;
+}
+
+/* Card hover effects */
+.server-card {
+  transition: border-color 0.3s ease, transform 0.2s ease;
+}
+
+.server-card:hover {
+  border-color: rgba(34, 197, 94, 0.5);
+  transform: translateY(-2px);
+}
+
+/* Button styles */
+.btn-primary {
+  background-color: #22C55E;
+  color: #000000;
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  transition: filter 0.1s ease, transform 0.1s ease;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+.btn-primary:active {
+  transform: scale(0.95);
+}
+
+.btn-secondary {
+  background-color: #27272A;
+  color: #E4E4E7;
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  transition: background-color 0.2s ease;
+}
+
+.btn-secondary:hover {
+  background-color: #3f3f46;
+}
+
+/* Input styles */
+.input-field {
+  background-color: #27272A;
+  border: 1px solid #3f3f46;
+  color: #E4E4E7;
+  font-family: 'JetBrains Mono', monospace;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input-field:focus {
+  border-color: #22C55E;
+  box-shadow: 0 0 0 1px #22C55E;
+}
+
+/* Sidebar */
+.sidebar-link {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.sidebar-link:hover {
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
+.sidebar-link.active {
+  background-color: rgba(34, 197, 94, 0.15);
+  border-left: 2px solid #22C55E;
+}
+
+/* Table styles */
+.data-table {
+  border-collapse: collapse;
+}
+
+.data-table th {
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  color: #A1A1AA;
+}
+
+.data-table tr {
+  transition: background-color 0.2s ease;
+}
+
+.data-table tbody tr:hover {
+  background-color: rgba(39, 39, 42, 0.5);
+}
+
+/* Chart container */
+.chart-container {
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.05) 0%, transparent 100%);
+}
+
+/* Tab navigation */
+.tab-button {
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.tab-button.active {
+  color: #22C55E;
+  border-bottom: 2px solid #22C55E;
+}
+
+/* Badge styles */
+.badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-success {
+  background-color: rgba(34, 197, 94, 0.2);
+  color: #22C55E;
+}
+
+.badge-danger {
+  background-color: rgba(239, 68, 68, 0.2);
+  color: #EF4444;
+}
+
+.badge-warning {
+  background-color: rgba(234, 179, 8, 0.2);
+  color: #EAB308;
+}
+
+.badge-info {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: #3B82F6;
+}
+
+/* Progress bar */
+.progress-bar {
+  background-color: #27272A;
+  overflow: hidden;
+}
+
+.progress-fill {
+  transition: width 0.5s ease;
+}
+
+/* Modal backdrop */
+.modal-backdrop {
+  background-color: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+}
+
+/* Terminal container */
+.terminal-container {
+  background-color: #0c0c0c;
+  border: 1px solid #333;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Metric card */
+.metric-card {
+  background: linear-gradient(135deg, #18181B 0%, #0c0c0c 100%);
+  border: 1px solid #27272A;
+}
+
+.metric-card:hover {
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+/* Loading spinner */
+.spinner {
+  border: 2px solid #27272A;
+  border-top-color: #22C55E;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
