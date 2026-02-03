@@ -88,12 +88,249 @@ tasks_collection = db["tasks"]
 task_logs_collection = db["task_logs"]
 documentation_collection = db["documentation"]
 activity_logs_collection = db["activity_logs"]
+alerts_collection = db["alerts"]
+alert_rules_collection = db["alert_rules"]
 
 # Create indexes
 users_collection.create_index("email", unique=True)
 servers_collection.create_index("hostname")
 server_metrics_collection.create_index([("server_id", ASCENDING), ("timestamp", DESCENDING)])
 activity_logs_collection.create_index([("user_id", ASCENDING), ("timestamp", DESCENDING)])
+alerts_collection.create_index([("server_id", ASCENDING), ("created_at", DESCENDING)])
+alerts_collection.create_index([("status", ASCENDING)])
+
+# ========================
+# SSH Connection Manager
+# ========================
+
+class SSHConnectionManager:
+    def __init__(self):
+        self.connections: Dict[str, paramiko.SSHClient] = {}
+        self.channels: Dict[str, paramiko.Channel] = {}
+    
+    async def connect(self, connection_id: str, hostname: str, port: int, username: str, password: str) -> bool:
+        if paramiko is None:
+            return False
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname, port=port, username=username, password=password, timeout=10)
+            
+            channel = client.invoke_shell(term='xterm-256color', width=120, height=40)
+            channel.setblocking(0)
+            
+            self.connections[connection_id] = client
+            self.channels[connection_id] = channel
+            return True
+        except Exception as e:
+            print(f"SSH connection error: {e}")
+            return False
+    
+    def send_command(self, connection_id: str, data: str) -> bool:
+        if connection_id not in self.channels:
+            return False
+        try:
+            self.channels[connection_id].send(data)
+            return True
+        except:
+            return False
+    
+    def read_output(self, connection_id: str) -> str:
+        if connection_id not in self.channels:
+            return ""
+        try:
+            output = ""
+            while self.channels[connection_id].recv_ready():
+                output += self.channels[connection_id].recv(4096).decode('utf-8', errors='replace')
+            return output
+        except:
+            return ""
+    
+    def disconnect(self, connection_id: str):
+        if connection_id in self.channels:
+            try:
+                self.channels[connection_id].close()
+            except:
+                pass
+            del self.channels[connection_id]
+        if connection_id in self.connections:
+            try:
+                self.connections[connection_id].close()
+            except:
+                pass
+            del self.connections[connection_id]
+    
+    def is_connected(self, connection_id: str) -> bool:
+        return connection_id in self.connections and connection_id in self.channels
+
+ssh_manager = SSHConnectionManager()
+
+# ========================
+# Alert System
+# ========================
+
+class AlertManager:
+    def __init__(self):
+        self.check_interval = 60  # seconds
+        self.running = False
+        self.thread = None
+    
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run_checker, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        self.running = False
+    
+    def _run_checker(self):
+        while self.running:
+            try:
+                self._check_servers()
+            except Exception as e:
+                print(f"Alert checker error: {e}")
+            import time
+            time.sleep(self.check_interval)
+    
+    def _check_servers(self):
+        # Get all alert rules
+        rules = list(alert_rules_collection.find({"enabled": True}))
+        
+        # Get all servers
+        servers = list(servers_collection.find())
+        
+        for server in servers:
+            server_id = str(server["_id"])
+            
+            # Check server offline
+            last_seen = server.get("last_seen")
+            if last_seen:
+                try:
+                    last_seen_dt = datetime.fromisoformat(last_seen.replace('Z', '+00:00'))
+                    if datetime.now(timezone.utc) - last_seen_dt > timedelta(minutes=5):
+                        if server.get("status") != "offline":
+                            servers_collection.update_one(
+                                {"_id": server["_id"]},
+                                {"$set": {"status": "offline"}}
+                            )
+                            self._create_alert(
+                                server_id=server_id,
+                                hostname=server.get("hostname"),
+                                alert_type="server_offline",
+                                severity="critical",
+                                message=f"Server {server.get('hostname')} is offline (no heartbeat for >5 minutes)"
+                            )
+                except:
+                    pass
+            
+            # Check metrics thresholds
+            metrics = server.get("metrics", {})
+            
+            for rule in rules:
+                if rule.get("server_ids") and server_id not in rule.get("server_ids", []):
+                    continue
+                
+                metric_type = rule.get("metric_type")
+                threshold = rule.get("threshold", 90)
+                comparison = rule.get("comparison", "gt")
+                
+                value = None
+                if metric_type == "cpu":
+                    value = metrics.get("cpu_percent")
+                elif metric_type == "memory":
+                    value = metrics.get("memory_percent")
+                elif metric_type == "disk":
+                    value = metrics.get("disk_percent")
+                
+                if value is not None:
+                    triggered = False
+                    if comparison == "gt" and value > threshold:
+                        triggered = True
+                    elif comparison == "lt" and value < threshold:
+                        triggered = True
+                    elif comparison == "eq" and value == threshold:
+                        triggered = True
+                    
+                    if triggered:
+                        # Check if similar alert exists in last hour
+                        existing = alerts_collection.find_one({
+                            "server_id": server_id,
+                            "alert_type": f"high_{metric_type}",
+                            "status": {"$ne": "resolved"},
+                            "created_at": {"$gte": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()}
+                        })
+                        
+                        if not existing:
+                            self._create_alert(
+                                server_id=server_id,
+                                hostname=server.get("hostname"),
+                                alert_type=f"high_{metric_type}",
+                                severity=rule.get("severity", "warning"),
+                                message=f"{metric_type.upper()} usage is {value:.1f}% (threshold: {threshold}%)"
+                            )
+    
+    def _create_alert(self, server_id: str, hostname: str, alert_type: str, severity: str, message: str):
+        alert = {
+            "server_id": server_id,
+            "hostname": hostname,
+            "alert_type": alert_type,
+            "severity": severity,
+            "message": message,
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "acknowledged": False,
+            "acknowledged_by": None,
+            "resolved_at": None
+        }
+        alerts_collection.insert_one(alert)
+        
+        # Send email notification
+        self._send_email_alert(alert)
+        
+        # Emit via socket
+        asyncio.run(sio.emit('new_alert', {
+            "server_id": server_id,
+            "hostname": hostname,
+            "alert_type": alert_type,
+            "severity": severity,
+            "message": message
+        }))
+    
+    def _send_email_alert(self, alert: dict):
+        if not settings.SMTP_HOST or not settings.ALERT_EMAIL_TO:
+            return
+        
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = settings.SMTP_FROM or settings.SMTP_USER
+            msg['To'] = settings.ALERT_EMAIL_TO
+            msg['Subject'] = f"[Nexus Command] {alert['severity'].upper()}: {alert['hostname']} - {alert['alert_type']}"
+            
+            body = f"""
+Nexus Command Alert
+
+Server: {alert['hostname']}
+Type: {alert['alert_type']}
+Severity: {alert['severity']}
+Message: {alert['message']}
+Time: {alert['created_at']}
+
+---
+Nexus Command Server Management System
+            """
+            msg.attach(MIMEText(body, 'plain'))
+            
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+                server.starttls()
+                if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                server.send_message(msg)
+        except Exception as e:
+            print(f"Failed to send alert email: {e}")
+
+alert_manager = AlertManager()
 
 # ========================
 # Socket.IO Setup
