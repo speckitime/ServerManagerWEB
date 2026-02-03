@@ -1,7 +1,11 @@
 #!/bin/bash
 #
-# Nexus Command - Linux Agent Installation Script
-# Supports: Debian 11/12, Ubuntu 20.04/22.04/24.04, RHEL/CentOS 8/9
+# Nexus Command - Linux Agent Installer
+# 
+# Installs the Nexus Command agent as a systemd service on Linux servers.
+# Supported: Debian, Ubuntu, CentOS, RHEL, Fedora
+#
+# Usage: curl -sSL https://your-nexuscommand-server/agents/linux/install.sh | sudo bash -s -- --server https://your-nexuscommand-server
 #
 
 set -e
@@ -10,184 +14,206 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${GREEN}"
-echo "  _   _                      ____                                          _ "
-echo " | \ | | _____  ___   _ ___ / ___|___  _ __ ___  _ __ ___   __ _ _ __   __| |"
-echo " |  \| |/ _ \ \/ / | | / __| |   / _ \| '_ \` _ \| '_ \` _ \ / _\` | '_ \ / _\` |"
-echo " | |\  |  __/>  <| |_| \__ \ |__| (_) | | | | | | | | | | | (_| | | | | (_| |"
-echo " |_| \_|\___/_/\_\\__,_|___/\____\___/|_| |_| |_|_| |_| |_|\__,_|_| |_|\__,_|"
-echo -e "${NC}"
-echo "Linux Agent Installation Script"
-echo "================================"
-echo ""
+# Configuration
+AGENT_USER="nexusagent"
+AGENT_HOME="/opt/nexuscommand-agent"
+AGENT_SERVICE="nexuscommand-agent"
+SERVER_URL=""
 
-# Check root
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Error: Please run as root (sudo)${NC}"
-    exit 1
-fi
-
-# Detect OS
-detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
-        VERSION=$VERSION_ID
-    elif [ -f /etc/debian_version ]; then
-        OS="debian"
-        VERSION=$(cat /etc/debian_version)
-    elif [ -f /etc/redhat-release ]; then
-        OS="rhel"
-        VERSION=$(cat /etc/redhat-release | sed 's/.*release \([0-9]*\).*/\1/')
-    else
-        echo -e "${RED}Error: Unsupported operating system${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}Detected OS: $OS $VERSION${NC}"
-}
-
-# Install dependencies
-install_dependencies() {
-    echo -e "${YELLOW}Installing dependencies...${NC}"
-    
-    case $OS in
-        ubuntu|debian)
-            apt-get update -qq
-            apt-get install -y -qq python3 python3-pip curl
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --server)
+            SERVER_URL="$2"
+            shift 2
             ;;
-        centos|rhel|rocky|almalinux)
-            yum install -y -q python3 python3-pip curl
-            ;;
-        fedora)
-            dnf install -y -q python3 python3-pip curl
+        --uninstall)
+            UNINSTALL=true
+            shift
             ;;
         *)
-            echo -e "${RED}Unsupported OS: $OS${NC}"
+            echo "Unknown option: $1"
             exit 1
             ;;
     esac
-    
-    # Install Python packages
-    pip3 install -q psutil requests
-    echo -e "${GREEN}Dependencies installed${NC}"
+done
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
-# Create directories
-create_directories() {
-    echo -e "${YELLOW}Creating directories...${NC}"
-    mkdir -p /opt/servermanager
-    mkdir -p /etc/servermanager
-    mkdir -p /var/log
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
-# Copy agent files
-copy_files() {
-    echo -e "${YELLOW}Copying agent files...${NC}"
-    
-    # If running from repo directory
-    if [ -f "./agent.py" ]; then
-        cp ./agent.py /opt/servermanager/agent.py
-    # If downloaded directly
-    elif [ -f "/tmp/agent.py" ]; then
-        cp /tmp/agent.py /opt/servermanager/agent.py
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+    exit 1
+}
+
+print_banner() {
+    echo -e "${GREEN}"
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║           Nexus Command - Linux Agent Installer               ║"
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log_error "This script must be run as root"
+    fi
+}
+
+detect_package_manager() {
+    if command -v apt-get &> /dev/null; then
+        PKG_MANAGER="apt"
+    elif command -v yum &> /dev/null; then
+        PKG_MANAGER="yum"
+    elif command -v dnf &> /dev/null; then
+        PKG_MANAGER="dnf"
     else
-        echo -e "${YELLOW}Downloading agent...${NC}"
-        curl -sSL "${API_URL}/agents/linux/agent.py" -o /opt/servermanager/agent.py
+        log_error "Unsupported package manager"
     fi
-    
-    chmod +x /opt/servermanager/agent.py
-    echo -e "${GREEN}Agent files copied${NC}"
 }
 
-# Configure agent
-configure_agent() {
-    echo -e "${YELLOW}Configuring agent...${NC}"
+install_dependencies() {
+    log_info "Installing dependencies..."
     
-    # Get API URL if not set
-    if [ -z "$API_URL" ]; then
-        read -p "Enter Nexus Command API URL (e.g., https://your-server.com): " API_URL
-    fi
+    case $PKG_MANAGER in
+        apt)
+            apt-get update -qq
+            apt-get install -y -qq python3 python3-pip python3-venv smartmontools hdparm dmidecode > /dev/null 2>&1
+            ;;
+        yum|dnf)
+            $PKG_MANAGER install -y -q python3 python3-pip smartmontools hdparm dmidecode > /dev/null 2>&1
+            ;;
+    esac
     
-    # Get API key if not set
-    if [ -z "$API_KEY" ]; then
-        read -p "Enter API Key (leave blank to auto-register): " API_KEY
-    fi
-    
-    # Create config file
-    cat > /etc/servermanager/agent.conf << EOF
-[server]
-api_url = $API_URL
-api_key = $API_KEY
-EOF
-    
-    chmod 600 /etc/servermanager/agent.conf
-    echo -e "${GREEN}Configuration saved${NC}"
+    log_success "Dependencies installed"
 }
 
-# Create systemd service
+create_user() {
+    log_info "Creating agent user..."
+    
+    if id "$AGENT_USER" &>/dev/null; then
+        log_info "User $AGENT_USER already exists"
+    else
+        useradd -r -m -d "$AGENT_HOME" -s /bin/false "$AGENT_USER"
+        log_success "User $AGENT_USER created"
+    fi
+}
+
+install_agent() {
+    log_info "Installing agent..."
+    
+    mkdir -p "$AGENT_HOME"
+    
+    # Copy agent script from the same directory or download
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$SCRIPT_DIR/agent.py" ]]; then
+        cp "$SCRIPT_DIR/agent.py" "$AGENT_HOME/agent.py"
+    else
+        # Download agent from server
+        curl -sSL "${SERVER_URL}/agents/linux/agent.py" -o "$AGENT_HOME/agent.py"
+    fi
+
+    chmod +x "$AGENT_HOME/agent.py"
+    chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_HOME"
+
+    # Install Python dependencies
+    pip3 install psutil requests > /dev/null 2>&1
+
+    log_success "Agent installed"
+}
+
 create_service() {
-    echo -e "${YELLOW}Creating systemd service...${NC}"
+    log_info "Creating systemd service..."
     
-    cat > /etc/systemd/system/servermanager-agent.service << 'EOF'
+    cat > /etc/systemd/system/${AGENT_SERVICE}.service << EOF
 [Unit]
-Description=Nexus Command Server Agent
+Description=Nexus Command Agent
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/servermanager/agent.py
+User=root
+WorkingDirectory=${AGENT_HOME}
+ExecStart=/usr/bin/python3 ${AGENT_HOME}/agent.py --server ${SERVER_URL}
 Restart=always
 RestartSec=10
-User=root
-WorkingDirectory=/opt/servermanager
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable servermanager-agent
-    systemctl start servermanager-agent
+    systemctl enable ${AGENT_SERVICE} > /dev/null 2>&1
+    systemctl start ${AGENT_SERVICE}
     
-    echo -e "${GREEN}Service created and started${NC}"
+    log_success "Service created and started"
 }
 
-# Test connectivity
-test_connection() {
-    echo -e "${YELLOW}Testing connection...${NC}"
+uninstall() {
+    log_info "Uninstalling Nexus Command Agent..."
     
-    if python3 /opt/servermanager/agent.py metrics > /dev/null 2>&1; then
-        echo -e "${GREEN}Agent is working correctly${NC}"
-    else
-        echo -e "${YELLOW}Warning: Could not verify agent functionality${NC}"
-    fi
+    systemctl stop ${AGENT_SERVICE} 2>/dev/null || true
+    systemctl disable ${AGENT_SERVICE} 2>/dev/null || true
+    rm -f /etc/systemd/system/${AGENT_SERVICE}.service
+    systemctl daemon-reload
+    
+    rm -rf "$AGENT_HOME"
+    userdel "$AGENT_USER" 2>/dev/null || true
+    rm -f /var/log/nexuscommand-agent.log
+    
+    log_success "Agent uninstalled"
+    exit 0
 }
 
-# Main installation
+print_summary() {
+    echo ""
+    echo -e "${GREEN}"
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║          Nexus Command Agent Installed Successfully!          ║"
+    echo "╠═══════════════════════════════════════════════════════════════╣"
+    echo "║                                                               ║"
+    echo "║  The agent is now running and will automatically register    ║"
+    echo "║  with the Nexus Command server.                              ║"
+    echo "║                                                               ║"
+    echo "║  Commands:                                                    ║"
+    echo "║  - Status: systemctl status ${AGENT_SERVICE}                  ║"
+    echo "║  - Logs:   journalctl -u ${AGENT_SERVICE} -f                  ║"
+    echo "║  - Stop:   systemctl stop ${AGENT_SERVICE}                    ║"
+    echo "║  - Start:  systemctl start ${AGENT_SERVICE}                   ║"
+    echo "║                                                               ║"
+    echo "║  To uninstall: Run this script with --uninstall               ║"
+    echo "║                                                               ║"
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+# Main
 main() {
-    detect_os
-    install_dependencies
-    create_directories
-    copy_files
-    configure_agent
-    create_service
-    test_connection
+    print_banner
+    check_root
     
-    echo ""
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}Installation Complete!${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo ""
-    echo "Agent Status:"
-    systemctl status servermanager-agent --no-pager
-    echo ""
-    echo "Useful commands:"
-    echo "  View logs:    journalctl -u servermanager-agent -f"
-    echo "  Restart:      systemctl restart servermanager-agent"
-    echo "  Stop:         systemctl stop servermanager-agent"
-    echo ""
+    if [[ "$UNINSTALL" == "true" ]]; then
+        uninstall
+    fi
+    
+    if [[ -z "$SERVER_URL" ]]; then
+        log_error "Server URL required. Use: --server https://your-nexuscommand-server"
+    fi
+    
+    detect_package_manager
+    install_dependencies
+    create_user
+    install_agent
+    create_service
+    print_summary
 }
 
-main
+main "$@"
