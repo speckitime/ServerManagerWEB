@@ -87,15 +87,24 @@ check_os() {
 install_dependencies() {
     log_info "Installing system dependencies..."
     
+    # Prevent any interactive prompts
     export DEBIAN_FRONTEND=noninteractive
+    export NEEDRESTART_MODE=a
     
-    apt-get update
+    # Pre-configure needrestart to avoid prompts on Ubuntu 24.04
+    if [[ -f /etc/needrestart/needrestart.conf ]]; then
+        sed -i 's/#$nrconf{restart} = '"'"'i'"'"';/$nrconf{restart} = '"'"'a'"'"';/' /etc/needrestart/needrestart.conf 2>/dev/null || true
+    fi
+    
+    log_info "Running apt-get update..."
+    apt-get update -y
     if [[ $? -ne 0 ]]; then
         log_error "apt-get update failed"
         exit 1
     fi
     
-    apt-get install -y \
+    log_info "Installing packages (this may take a few minutes)..."
+    apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
         curl \
         wget \
         git \
