@@ -26,6 +26,7 @@ export default function DashboardPage() {
   const [stats, setStats] = useState(null);
   const [servers, setServers] = useState([]);
   const [activities, setActivities] = useState([]);
+  const [alertCounts, setAlertCounts] = useState({ total: 0, critical: 0, warning: 0, info: 0 });
   const [loading, setLoading] = useState(true);
   const { showError } = useToast();
 
@@ -36,14 +37,16 @@ export default function DashboardPage() {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const [statsRes, serversRes, activitiesRes] = await Promise.all([
+      const [statsRes, serversRes, activitiesRes, alertsRes] = await Promise.all([
         dashboardAPI.getStats(),
         serverAPI.list(),
-        dashboardAPI.getActivityLogs(10)
+        dashboardAPI.getActivityLogs(10),
+        api.get('/api/alerts/active-count').catch(() => ({ data: { total: 0, critical: 0, warning: 0, info: 0 } }))
       ]);
       setStats(statsRes.data);
       setServers(serversRes.data);
       setActivities(activitiesRes.data);
+      setAlertCounts(alertsRes.data);
     } catch (err) {
       showError('Failed to load dashboard data');
     } finally {
