@@ -21,7 +21,7 @@ NC='\033[0m' # No Color
 # Configuration
 NEXUS_USER="nexuscommand"
 NEXUS_HOME="/opt/nexuscommand"
-NEXUS_REPO="https://github.com/your-org/nexuscommand.git"
+NEXUS_REPO="https://github.com/speckitime/ServerManagerWEB.git"
 MONGODB_VERSION="7.0"
 NODE_VERSION="20"
 PYTHON_VERSION="3.11"
