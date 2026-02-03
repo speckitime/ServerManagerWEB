@@ -1,184 +1,518 @@
 #
-# Nexus Command - Windows Agent Installation Script
-# Run as Administrator in PowerShell
+# Nexus Command - Windows Agent Installer
+# 
+# Installs the Nexus Command agent as a Windows Service.
+#
+# Usage (PowerShell as Administrator):
+# Invoke-WebRequest -Uri https://your-nexuscommand-server/agents/windows/install.ps1 -OutFile install.ps1
+# .\install.ps1 -ServerUrl "https://your-nexuscommand-server"
 #
 
 param(
-    [string]$ApiUrl = "",
-    [string]$ApiKey = ""
+    [Parameter(Mandatory=$true)]
+    [string]$ServerUrl,
+    
+    [switch]$Uninstall
 )
 
 $ErrorActionPreference = "Stop"
 
-Write-Host @"
-  _   _                      ____                                          _ 
- | \ | | _____  ___   _ ___ / ___|___  _ __ ___  _ __ ___   __ _ _ __   __| |
- |  \| |/ _ \ \/ / | | / __| |   / _ \| '_ ` _ \| '_ ` _ \ / _` | '_ \ / _` |
- | |\  |  __/>  <| |_| \__ \ |__| (_) | | | | | | | | | | | (_| | | | | (_| |
- |_| \_|\___/_/\_\\__,_|___/\____\___/|_| |_| |_|_| |_| |_|\__,_|_| |_|\__,_|
+# Configuration
+$AgentName = "NexusCommandAgent"
+$AgentDisplayName = "Nexus Command Agent"
+$AgentPath = "C:\Program Files\NexusCommand\Agent"
+$AgentScript = "$AgentPath\agent.py"
+$LogPath = "C:\Program Files\NexusCommand\Logs"
 
-"@ -ForegroundColor Green
+function Write-Banner {
+    Write-Host ""
+    Write-Host "╔═══════════════════════════════════════════════════════════════╗" -ForegroundColor Green
+    Write-Host "║           Nexus Command - Windows Agent Installer             ║" -ForegroundColor Green
+    Write-Host "╚═══════════════════════════════════════════════════════════════╝" -ForegroundColor Green
+    Write-Host ""
+}
 
-Write-Host "Windows Agent Installation Script" -ForegroundColor Green
-Write-Host "=================================" -ForegroundColor Green
-Write-Host ""
+function Write-Info {
+    param([string]$Message)
+    Write-Host "[INFO] $Message" -ForegroundColor Blue
+}
 
-# Check Administrator
-if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Write-Host "Error: Please run as Administrator" -ForegroundColor Red
+function Write-Success {
+    param([string]$Message)
+    Write-Host "[SUCCESS] $Message" -ForegroundColor Green
+}
+
+function Write-Error {
+    param([string]$Message)
+    Write-Host "[ERROR] $Message" -ForegroundColor Red
     exit 1
 }
 
-$InstallPath = "C:\Program Files\ServerManager"
-$ServiceName = "NexusCommandAgent"
+function Test-Admin {
+    $currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
 
-function Install-Prerequisites {
-    Write-Host "Checking prerequisites..." -ForegroundColor Yellow
+function Install-Python {
+    Write-Info "Checking Python installation..."
     
-    # Check Python
     try {
-        $pythonVersion = & python --version 2>&1
-        Write-Host "Found: $pythonVersion" -ForegroundColor Green
-    } catch {
-        Write-Host "Python not found. Installing..." -ForegroundColor Yellow
+        $pythonVersion = python --version 2>&1
+        Write-Info "Found Python: $pythonVersion"
+    }
+    catch {
+        Write-Info "Python not found. Installing Python..."
         
-        # Download Python installer
-        $pythonUrl = "https://www.python.org/ftp/python/3.11.7/python-3.11.7-amd64.exe"
         $pythonInstaller = "$env:TEMP\python-installer.exe"
-        Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonInstaller
+        Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.0/python-3.11.0-amd64.exe" -OutFile $pythonInstaller
         
-        # Install Python
-        Start-Process -FilePath $pythonInstaller -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
-        Remove-Item $pythonInstaller
+        Start-Process -FilePath $pythonInstaller -ArgumentList "/quiet", "InstallAllUsers=1", "PrependPath=1" -Wait
         
         # Refresh PATH
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine")
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+        
+        Remove-Item $pythonInstaller -Force
+        Write-Success "Python installed"
     }
     
-    # Install Python packages
-    Write-Host "Installing Python packages..." -ForegroundColor Yellow
-    & pip install psutil requests --quiet
+    # Install required packages
+    Write-Info "Installing Python packages..."
+    pip install psutil requests pywin32 2>&1 | Out-Null
+    Write-Success "Python packages installed"
 }
 
-function Create-Directories {
-    Write-Host "Creating directories..." -ForegroundColor Yellow
+function Install-Agent {
+    Write-Info "Installing Nexus Command Agent..."
     
-    if (-NOT (Test-Path $InstallPath)) {
-        New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
-    }
-}
+    # Create directories
+    New-Item -ItemType Directory -Path $AgentPath -Force | Out-Null
+    New-Item -ItemType Directory -Path $LogPath -Force | Out-Null
+    
+    # Create agent script
+    $agentScript = @'
+#!/usr/bin/env python3
+"""
+Nexus Command Windows Agent
+Collects system metrics and sends them to the central server.
+"""
 
-function Copy-AgentFiles {
-    Write-Host "Copying agent files..." -ForegroundColor Yellow
+import os
+import sys
+import json
+import time
+import socket
+import platform
+import subprocess
+import logging
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional, List
+
+# Configure logging
+log_path = r"C:\Program Files\NexusCommand\Logs\agent.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(log_path)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+try:
+    import psutil
+except ImportError:
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'psutil'])
+    import psutil
+
+try:
+    import requests
+except ImportError:
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'requests'])
+    import requests
+
+try:
+    import wmi
+except ImportError:
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'wmi'])
+    import wmi
+
+
+class NexusAgent:
+    def __init__(self, server_url: str, api_key: Optional[str] = None):
+        self.server_url = server_url.rstrip('/')
+        self.api_key = api_key
+        self.hostname = socket.gethostname()
+        self.interval = 30
+        self.wmi = wmi.WMI()
+        
+    def get_ip_address(self) -> str:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return "127.0.0.1"
     
-    # If running from repo directory
-    $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-    if (Test-Path "$scriptPath\agent.py") {
-        Copy-Item "$scriptPath\agent.py" "$InstallPath\agent.py" -Force
-    } else {
-        # Download from server
-        if ($ApiUrl) {
-            Invoke-WebRequest -Uri "$ApiUrl/agents/windows/agent.py" -OutFile "$InstallPath\agent.py"
-        } else {
-            Write-Host "Error: agent.py not found and no API URL provided" -ForegroundColor Red
-            exit 1
+    def get_os_info(self) -> Dict[str, str]:
+        return {
+            "type": "windows",
+            "version": f"{platform.system()} {platform.release()} {platform.version()}"
         }
-    }
+    
+    def get_cpu_info(self) -> Dict[str, Any]:
+        try:
+            cpu = self.wmi.Win32_Processor()[0]
+            return {
+                "model": cpu.Name,
+                "cores": int(cpu.NumberOfCores),
+                "threads": int(cpu.NumberOfLogicalProcessors),
+                "frequency_mhz": int(cpu.MaxClockSpeed)
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get CPU info: {e}")
+            return {}
+    
+    def get_memory_info(self) -> Dict[str, Any]:
+        mem = psutil.virtual_memory()
+        
+        slots = []
+        try:
+            for mem_module in self.wmi.Win32_PhysicalMemory():
+                slots.append({
+                    "slot": mem_module.DeviceLocator,
+                    "size": f"{int(mem_module.Capacity) // (1024**3)} GB",
+                    "manufacturer": mem_module.Manufacturer,
+                    "speed": f"{mem_module.Speed} MHz" if mem_module.Speed else "Unknown"
+                })
+        except:
+            pass
+        
+        return {
+            "total_bytes": mem.total,
+            "used_bytes": mem.used,
+            "percent": mem.percent,
+            "slots": slots
+        }
+    
+    def get_disk_info(self) -> List[Dict[str, Any]]:
+        disks = []
+        
+        for partition in psutil.disk_partitions():
+            try:
+                if 'cdrom' in partition.opts or partition.fstype == '':
+                    continue
+                    
+                usage = psutil.disk_usage(partition.mountpoint)
+                
+                disk_info = {
+                    "device": partition.device,
+                    "mountpoint": partition.mountpoint,
+                    "fstype": partition.fstype,
+                    "total_bytes": usage.total,
+                    "used_bytes": usage.used,
+                    "free_bytes": usage.free,
+                    "percent": usage.percent
+                }
+                
+                # Get disk model and serial via WMI
+                try:
+                    drive_letter = partition.device.rstrip('\\')
+                    for disk in self.wmi.Win32_LogicalDisk(DeviceID=drive_letter):
+                        disk_info['volume_name'] = disk.VolumeName
+                except:
+                    pass
+                
+                disks.append(disk_info)
+            except Exception as e:
+                logger.debug(f"Failed to get disk info: {e}")
+        
+        return disks
+    
+    def get_network_info(self) -> Dict[str, Any]:
+        net = psutil.net_io_counters()
+        
+        interfaces = []
+        for name, addrs in psutil.net_if_addrs().items():
+            if 'Loopback' in name:
+                continue
+            iface = {"name": name}
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    iface['ip'] = addr.address
+            if 'ip' in iface:
+                interfaces.append(iface)
+        
+        return {
+            "bytes_sent": net.bytes_sent,
+            "bytes_recv": net.bytes_recv,
+            "packets_sent": net.packets_sent,
+            "packets_recv": net.packets_recv,
+            "interfaces": interfaces
+        }
+    
+    def get_processes(self) -> List[Dict[str, Any]]:
+        processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'status']):
+            try:
+                pinfo = proc.info
+                processes.append({
+                    "pid": pinfo['pid'],
+                    "name": pinfo['name'],
+                    "cpu_percent": pinfo['cpu_percent'],
+                    "memory_percent": pinfo['memory_percent'],
+                    "status": pinfo['status']
+                })
+            except:
+                pass
+        
+        processes.sort(key=lambda x: x['cpu_percent'] or 0, reverse=True)
+        return processes[:20]
+    
+    def collect_metrics(self) -> Dict[str, Any]:
+        cpu_info = self.get_cpu_info()
+        mem_info = self.get_memory_info()
+        disk_info = self.get_disk_info()
+        net_info = self.get_network_info()
+        
+        total_disk = sum(d.get('total_bytes', 0) for d in disk_info)
+        used_disk = sum(d.get('used_bytes', 0) for d in disk_info)
+        disk_percent = (used_disk / total_disk * 100) if total_disk > 0 else 0
+        
+        return {
+            "server_id": "",
+            "hostname": self.hostname,
+            "ip_address": self.get_ip_address(),
+            "cpu_percent": psutil.cpu_percent(interval=1),
+            "memory_percent": mem_info['percent'],
+            "memory_used": mem_info['used_bytes'],
+            "memory_total": mem_info['total_bytes'],
+            "disk_percent": disk_percent,
+            "disk_used": used_disk,
+            "disk_total": total_disk,
+            "network_bytes_sent": net_info['bytes_sent'],
+            "network_bytes_recv": net_info['bytes_recv'],
+            "processes": self.get_processes(),
+            "disks": disk_info,
+            "hardware": {
+                "cpu": cpu_info,
+                "memory": mem_info,
+                "network_interfaces": net_info['interfaces']
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    
+    def register(self) -> bool:
+        try:
+            os_info = self.get_os_info()
+            data = {
+                "hostname": self.hostname,
+                "ip_address": self.get_ip_address(),
+                "os_type": os_info['type'],
+                "os_version": os_info['version']
+            }
+            
+            response = requests.post(
+                f"{self.server_url}/api/agents/register",
+                json=data,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                self.api_key = result.get('api_key')
+                
+                api_key_file = os.path.join(os.path.dirname(__file__), '.api_key')
+                with open(api_key_file, 'w') as f:
+                    f.write(self.api_key)
+                
+                logger.info(f"Registered successfully. Server ID: {result.get('server_id')}")
+                return True
+            else:
+                logger.error(f"Registration failed: {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Registration error: {e}")
+            return False
+    
+    def send_metrics(self) -> bool:
+        try:
+            metrics = self.collect_metrics()
+            
+            response = requests.post(
+                f"{self.server_url}/api/agents/metrics",
+                json={"api_key": self.api_key, "metrics": metrics},
+                timeout=30
+            )
+            
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Failed to send metrics: {e}")
+            return False
+    
+    def send_heartbeat(self) -> bool:
+        try:
+            response = requests.post(
+                f"{self.server_url}/api/agents/heartbeat",
+                params={"api_key": self.api_key},
+                timeout=10
+            )
+            return response.status_code == 200
+        except:
+            return False
+    
+    def run(self):
+        logger.info(f"Starting Nexus Command Agent for {self.hostname}")
+        
+        api_key_file = os.path.join(os.path.dirname(__file__), '.api_key')
+        if os.path.exists(api_key_file):
+            with open(api_key_file, 'r') as f:
+                self.api_key = f.read().strip()
+            logger.info("Loaded existing API key")
+        else:
+            if not self.register():
+                logger.error("Failed to register. Exiting.")
+                sys.exit(1)
+        
+        metrics_counter = 0
+        while True:
+            try:
+                self.send_heartbeat()
+                
+                if metrics_counter == 0:
+                    if self.send_metrics():
+                        logger.debug("Metrics sent successfully")
+                    else:
+                        logger.warning("Failed to send metrics")
+                
+                metrics_counter = (metrics_counter + 1) % 3
+                time.sleep(10)
+                
+            except KeyboardInterrupt:
+                logger.info("Agent stopped")
+                break
+            except Exception as e:
+                logger.error(f"Error in main loop: {e}")
+                time.sleep(30)
+
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Nexus Command Windows Agent')
+    parser.add_argument('--server', required=True, help='Nexus Command server URL')
+    args = parser.parse_args()
+    
+    agent = NexusAgent(server_url=args.server)
+    agent.run()
+'@
+
+    $agentScript | Out-File -FilePath $AgentScript -Encoding UTF8
+    
+    # Create config file
+    $config = @{
+        server_url = $ServerUrl
+    } | ConvertTo-Json
+    
+    $config | Out-File -FilePath "$AgentPath\config.json" -Encoding UTF8
+    
+    Write-Success "Agent files installed"
 }
 
-function Configure-Agent {
-    Write-Host "Configuring agent..." -ForegroundColor Yellow
+function Install-Service {
+    Write-Info "Installing Windows Service..."
     
-    if (-NOT $ApiUrl) {
-        $ApiUrl = Read-Host "Enter Nexus Command API URL (e.g., https://your-server.com)"
-    }
-    
-    if (-NOT $ApiKey) {
-        $ApiKey = Read-Host "Enter API Key (leave blank to auto-register)"
-    }
-    
-    $config = @"
-[server]
-api_url = $ApiUrl
-api_key = $ApiKey
-"@
-    
-    $config | Out-File -FilePath "$InstallPath\config.ini" -Encoding UTF8
-    
-    Write-Host "Configuration saved" -ForegroundColor Green
-}
-
-function Create-WindowsService {
-    Write-Host "Creating Windows service..." -ForegroundColor Yellow
-    
-    # Check if service exists
-    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-    if ($service) {
-        Write-Host "Stopping existing service..." -ForegroundColor Yellow
-        Stop-Service -Name $ServiceName -Force
-        & sc.exe delete $ServiceName
-        Start-Sleep -Seconds 2
-    }
-    
-    # Create service using NSSM or sc.exe
-    $pythonPath = (Get-Command python).Source
-    $agentPath = "$InstallPath\agent.py"
-    
-    # Create a batch file wrapper
-    $batchContent = @"
+    # Create a wrapper script for NSSM
+    $wrapperScript = @"
 @echo off
-cd /d "$InstallPath"
-"$pythonPath" "$agentPath"
+cd /d "$AgentPath"
+python agent.py --server "$ServerUrl"
 "@
-    $batchContent | Out-File -FilePath "$InstallPath\run-agent.bat" -Encoding ASCII
     
-    # Create service
-    & sc.exe create $ServiceName binPath= "$InstallPath\run-agent.bat" start= auto DisplayName= "Nexus Command Agent"
+    $wrapperScript | Out-File -FilePath "$AgentPath\run-agent.bat" -Encoding ASCII
+    
+    # Download NSSM if not present
+    $nssmPath = "$AgentPath\nssm.exe"
+    if (-not (Test-Path $nssmPath)) {
+        Write-Info "Downloading NSSM..."
+        $nssmZip = "$env:TEMP\nssm.zip"
+        Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $nssmZip
+        Expand-Archive -Path $nssmZip -DestinationPath "$env:TEMP\nssm" -Force
+        Copy-Item "$env:TEMP\nssm\nssm-2.24\win64\nssm.exe" $nssmPath
+        Remove-Item $nssmZip -Force
+        Remove-Item "$env:TEMP\nssm" -Recurse -Force
+    }
+    
+    # Remove existing service if present
+    & $nssmPath stop $AgentName 2>&1 | Out-Null
+    & $nssmPath remove $AgentName confirm 2>&1 | Out-Null
+    
+    # Install service
+    & $nssmPath install $AgentName "$AgentPath\run-agent.bat"
+    & $nssmPath set $AgentName DisplayName $AgentDisplayName
+    & $nssmPath set $AgentName Description "Nexus Command monitoring agent for Windows servers"
+    & $nssmPath set $AgentName AppDirectory $AgentPath
+    & $nssmPath set $AgentName AppStdout "$LogPath\service.log"
+    & $nssmPath set $AgentName AppStderr "$LogPath\service-error.log"
+    & $nssmPath set $AgentName Start SERVICE_AUTO_START
     
     # Start service
-    Start-Service -Name $ServiceName
+    & $nssmPath start $AgentName
     
-    Write-Host "Service created and started" -ForegroundColor Green
+    Write-Success "Service installed and started"
 }
 
-function Test-Connection {
-    Write-Host "Testing connection..." -ForegroundColor Yellow
+function Uninstall-Agent {
+    Write-Info "Uninstalling Nexus Command Agent..."
     
-    try {
-        $result = & python "$InstallPath\agent.py" metrics 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Agent is working correctly" -ForegroundColor Green
-        } else {
-            Write-Host "Warning: Could not verify agent functionality" -ForegroundColor Yellow
-        }
-    } catch {
-        Write-Host "Warning: Could not verify agent functionality" -ForegroundColor Yellow
+    $nssmPath = "$AgentPath\nssm.exe"
+    if (Test-Path $nssmPath) {
+        & $nssmPath stop $AgentName 2>&1 | Out-Null
+        & $nssmPath remove $AgentName confirm 2>&1 | Out-Null
     }
+    
+    Remove-Item -Path "C:\Program Files\NexusCommand" -Recurse -Force -ErrorAction SilentlyContinue
+    
+    Write-Success "Agent uninstalled"
+    exit 0
 }
 
-# Main Installation
-try {
-    Install-Prerequisites
-    Create-Directories
-    Copy-AgentFiles
-    Configure-Agent
-    Create-WindowsService
-    Test-Connection
-    
+function Show-Summary {
     Write-Host ""
-    Write-Host "========================================" -ForegroundColor Green
-    Write-Host "Installation Complete!" -ForegroundColor Green
-    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "╔═══════════════════════════════════════════════════════════════╗" -ForegroundColor Green
+    Write-Host "║          Nexus Command Agent Installed Successfully!          ║" -ForegroundColor Green
+    Write-Host "╠═══════════════════════════════════════════════════════════════╣" -ForegroundColor Green
+    Write-Host "║                                                               ║" -ForegroundColor Green
+    Write-Host "║  The agent is now running as a Windows Service.              ║" -ForegroundColor Green
+    Write-Host "║                                                               ║" -ForegroundColor Green
+    Write-Host "║  Server: $ServerUrl" -ForegroundColor Green
+    Write-Host "║                                                               ║" -ForegroundColor Green
+    Write-Host "║  Commands (PowerShell as Admin):                              ║" -ForegroundColor Green
+    Write-Host "║  - Status:  Get-Service $AgentName                            ║" -ForegroundColor Green
+    Write-Host "║  - Stop:    Stop-Service $AgentName                           ║" -ForegroundColor Green
+    Write-Host "║  - Start:   Start-Service $AgentName                          ║" -ForegroundColor Green
+    Write-Host "║  - Logs:    Get-Content '$LogPath\agent.log' -Tail 50         ║" -ForegroundColor Green
+    Write-Host "║                                                               ║" -ForegroundColor Green
+    Write-Host "║  To uninstall: .\install.ps1 -ServerUrl '$ServerUrl' -Uninstall║" -ForegroundColor Green
+    Write-Host "║                                                               ║" -ForegroundColor Green
+    Write-Host "╚═══════════════════════════════════════════════════════════════╝" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Service Status:"
-    Get-Service -Name $ServiceName | Format-List Name, Status, StartType
-    Write-Host ""
-    Write-Host "Useful commands:"
-    Write-Host "  View logs:    Get-Content '$InstallPath\agent.log' -Tail 50"
-    Write-Host "  Restart:      Restart-Service $ServiceName"
-    Write-Host "  Stop:         Stop-Service $ServiceName"
-    Write-Host ""
-} catch {
-    Write-Host "Installation failed: $_" -ForegroundColor Red
-    exit 1
 }
+
+# Main
+Write-Banner
+
+if (-not (Test-Admin)) {
+    Write-Error "This script must be run as Administrator"
+}
+
+if ($Uninstall) {
+    Uninstall-Agent
+}
+
+Install-Python
+Install-Agent
+Install-Service
+Show-Summary
