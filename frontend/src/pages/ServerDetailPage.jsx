@@ -67,6 +67,7 @@ export default function ServerDetailPage() {
   const [server, setServer] = useState(null);
   const [extendedInfo, setExtendedInfo] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showSSHTerminal, setShowSSHTerminal] = useState(false);
   const { showSuccess, showError } = useToast();
 
   useEffect(() => {
