@@ -11,11 +11,14 @@ import {
   ArrowUpRight,
   Cpu,
   HardDrive,
-  MemoryStick
+  MemoryStick,
+  Bell,
+  AlertCircle
 } from 'lucide-react';
 import { Layout } from '../components/layout';
 import { Card, CardHeader, CardTitle, CardContent, Button, Badge, Spinner, ProgressBar } from '../components/ui';
 import { dashboardAPI, serverAPI } from '../utils/api';
+import api from '../utils/api';
 import { formatBytes, formatRelativeTime, cn } from '../utils/helpers';
 import { useToast } from '../hooks/use-toast';
 
