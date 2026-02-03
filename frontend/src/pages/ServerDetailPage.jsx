@@ -174,7 +174,7 @@ export default function ServerDetailPage() {
               <RefreshCw className="w-4 h-4" />
             </Button>
             {server.os_type === 'linux' ? (
-              <Button variant="outline" size="sm" data-testid="ssh-connect-btn">
+              <Button variant="outline" size="sm" onClick={() => setShowSSHTerminal(true)} data-testid="ssh-connect-btn">
                 <Terminal className="w-4 h-4 mr-2" />
                 SSH
               </Button>
