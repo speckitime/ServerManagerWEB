@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 
 class NexusCommandAPITester:
-    def __init__(self, base_url="https://sole-frenk-emergentnomad-f54bf780.koyeb.app"):
+    def __init__(self, base_url="http://localhost:8001"):
         self.base_url = base_url
         self.token = None
         self.user_id = None
