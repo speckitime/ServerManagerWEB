@@ -1,17 +1,19 @@
 """
 Nexus Command - Server Management System Backend
-FastAPI + MongoDB + WebSocket for real-time updates
+FastAPI + MongoDB + WebSocket for real-time updates + SSH Terminal + Alert System
 """
 
 import os
 import json
 import secrets
 import hashlib
+import asyncio
+import threading
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+from typing import Optional, List, Dict
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, status, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, HTTPException, Depends, status, WebSocket, WebSocketDisconnect, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, EmailStr
@@ -23,6 +25,20 @@ from jose import JWTError, jwt
 from cryptography.fernet import Fernet
 import socketio
 
+# SSH imports
+try:
+    import paramiko
+except ImportError:
+    paramiko = None
+
+# Email imports
+try:
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+except ImportError:
+    smtplib = None
+
 # ========================
 # Configuration
 # ========================
@@ -33,6 +49,13 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "nexus_command_secret_key_change_in_production"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
+    # SMTP Settings for alerts
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    ALERT_EMAIL_TO: str = ""
 
     class Config:
         env_file = ".env"
