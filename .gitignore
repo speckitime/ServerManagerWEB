@@ -1,7 +1,0 @@
-vendor/
-node_modules/
-.env
-.env.local
-.DS_Store
-/public/assets/*.map
-/storage/
