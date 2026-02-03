@@ -16,7 +16,12 @@ import {
   Package,
   FileText,
   Clock,
-  Book
+  Book,
+  Info,
+  Thermometer,
+  CheckCircle,
+  AlertTriangle,
+  ExternalLink
 } from 'lucide-react';
 import {
   LineChart,
@@ -59,8 +64,8 @@ export default function ServerDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [server, setServer] = useState(null);
+  const [extendedInfo, setExtendedInfo] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
   const { showSuccess, showError } = useToast();
 
   useEffect(() => {
@@ -70,13 +75,37 @@ export default function ServerDetailPage() {
   const fetchServerDetails = async () => {
     try {
       setLoading(true);
-      const response = await serverAPI.get(id);
-      setServer(response.data);
+      const [serverRes, extendedRes] = await Promise.all([
+        serverAPI.get(id),
+        serverAPI.getExtended(id).catch(() => ({ data: null }))
+      ]);
+      setServer(serverRes.data);
+      setExtendedInfo(extendedRes.data);
     } catch (err) {
       showError('Failed to load server details');
       navigate('/servers');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRdpConnect = async () => {
+    try {
+      const response = await serverAPI.getRdpFile(id);
+      const { filename, content } = response.data;
+      
+      // Create and download RDP file
+      const blob = new Blob([content], { type: 'application/x-rdp' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      showSuccess('RDP file downloaded');
+    } catch (err) {
+      showError(err.response?.data?.detail || 'Failed to generate RDP file');
     }
   };
 
@@ -91,6 +120,9 @@ export default function ServerDetailPage() {
   }
 
   if (!server) return null;
+
+  const lastUpdate = extendedInfo?.last_metrics_update || server.last_seen;
+  const isRealtime = extendedInfo?.agent_connected;
 
   return (
     <Layout title={server.hostname}>
@@ -109,9 +141,25 @@ export default function ServerDetailPage() {
               )}
               <div>
                 <h1 className="font-mono font-bold text-2xl">{server.hostname}</h1>
-                <p className="text-sm text-muted-foreground font-mono">
-                  {server.ip_address} • {server.os_version || server.os_type}
-                </p>
+                <div className="flex items-center gap-3 text-sm text-muted-foreground font-mono">
+                  <span>{server.ip_address}</span>
+                  <span>•</span>
+                  <span>{server.os_version || server.os_type}</span>
+                  <span>•</span>
+                  <span className="flex items-center gap-1">
+                    {isRealtime ? (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-online animate-pulse" />
+                        <span className="text-online">Live</span>
+                      </>
+                    ) : (
+                      <>
+                        <Clock className="w-3 h-3" />
+                        <span>{formatRelativeTime(lastUpdate)}</span>
+                      </>
+                    )}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -123,10 +171,17 @@ export default function ServerDetailPage() {
             <Button variant="ghost" size="sm" onClick={fetchServerDetails} data-testid="refresh-btn">
               <RefreshCw className="w-4 h-4" />
             </Button>
-            <Button variant="outline" size="sm" data-testid="ssh-connect-btn">
-              <Terminal className="w-4 h-4 mr-2" />
-              SSH
-            </Button>
+            {server.os_type === 'linux' ? (
+              <Button variant="outline" size="sm" data-testid="ssh-connect-btn">
+                <Terminal className="w-4 h-4 mr-2" />
+                SSH
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={handleRdpConnect} data-testid="rdp-connect-btn">
+                <Monitor className="w-4 h-4 mr-2" />
+                RDP
+              </Button>
+            )}
           </div>
         </div>
 
@@ -138,8 +193,14 @@ export default function ServerDetailPage() {
                 <TabsTrigger value="overview" activeTab={activeTab} setActiveTab={setActiveTab}>
                   <Activity className="w-4 h-4 mr-2" />Overview
                 </TabsTrigger>
+                <TabsTrigger value="hardware" activeTab={activeTab} setActiveTab={setActiveTab}>
+                  <Cpu className="w-4 h-4 mr-2" />Hardware
+                </TabsTrigger>
+                <TabsTrigger value="disks" activeTab={activeTab} setActiveTab={setActiveTab}>
+                  <HardDrive className="w-4 h-4 mr-2" />Disks
+                </TabsTrigger>
                 <TabsTrigger value="monitoring" activeTab={activeTab} setActiveTab={setActiveTab}>
-                  <Cpu className="w-4 h-4 mr-2" />Monitoring
+                  <Activity className="w-4 h-4 mr-2" />Monitoring
                 </TabsTrigger>
                 <TabsTrigger value="packages" activeTab={activeTab} setActiveTab={setActiveTab}>
                   <Package className="w-4 h-4 mr-2" />Packages
@@ -153,16 +214,19 @@ export default function ServerDetailPage() {
                 <TabsTrigger value="logs" activeTab={activeTab} setActiveTab={setActiveTab}>
                   <FileText className="w-4 h-4 mr-2" />Logs
                 </TabsTrigger>
-                <TabsTrigger value="tasks" activeTab={activeTab} setActiveTab={setActiveTab}>
-                  <Clock className="w-4 h-4 mr-2" />Tasks
-                </TabsTrigger>
                 <TabsTrigger value="docs" activeTab={activeTab} setActiveTab={setActiveTab}>
                   <Book className="w-4 h-4 mr-2" />Docs
                 </TabsTrigger>
               </TabsList>
 
               <TabsContent value="overview" activeTab={activeTab}>
-                <OverviewTab server={server} />
+                <OverviewTab server={server} extendedInfo={extendedInfo} />
+              </TabsContent>
+              <TabsContent value="hardware" activeTab={activeTab}>
+                <HardwareTab serverId={id} />
+              </TabsContent>
+              <TabsContent value="disks" activeTab={activeTab}>
+                <DisksTab serverId={id} />
               </TabsContent>
               <TabsContent value="monitoring" activeTab={activeTab}>
                 <MonitoringTab serverId={id} />
@@ -179,9 +243,6 @@ export default function ServerDetailPage() {
               <TabsContent value="logs" activeTab={activeTab}>
                 <LogsTab serverId={id} />
               </TabsContent>
-              <TabsContent value="tasks" activeTab={activeTab}>
-                <TasksTab serverId={id} />
-              </TabsContent>
               <TabsContent value="docs" activeTab={activeTab}>
                 <DocumentationTab serverId={id} />
               </TabsContent>
@@ -193,7 +254,7 @@ export default function ServerDetailPage() {
   );
 }
 
-const OverviewTab = ({ server }) => {
+const OverviewTab = ({ server, extendedInfo }) => {
   const metrics = server.metrics || {};
 
   return (
@@ -242,8 +303,9 @@ const OverviewTab = ({ server }) => {
           <InfoRow label="Hostname" value={server.hostname} />
           <InfoRow label="IP Address" value={server.ip_address} />
           <InfoRow label="OS" value={server.os_version || server.os_type} />
-          <InfoRow label="SSH Port" value={server.ssh_port} />
+          <InfoRow label={server.os_type === 'windows' ? 'RDP Port' : 'SSH Port'} value={server.ssh_port} />
           <InfoRow label="Status" value={server.status} />
+          <InfoRow label="Uptime" value={extendedInfo?.uptime || 'Unknown'} />
           <InfoRow label="Last Seen" value={formatRelativeTime(server.last_seen)} />
           <InfoRow label="Added" value={formatRelativeTime(server.created_at)} />
         </CardContent>
@@ -281,6 +343,262 @@ const InfoRow = ({ label, value }) => (
     <span className="text-sm font-mono">{value}</span>
   </div>
 );
+
+const HardwareTab = ({ serverId }) => {
+  const [hardware, setHardware] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchHardware();
+  }, [serverId]);
+
+  const fetchHardware = async () => {
+    try {
+      const response = await serverAPI.getHardware(serverId);
+      setHardware(response.data);
+    } catch (err) {
+      console.error('Failed to load hardware info');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="flex justify-center py-12"><Spinner size="lg" /></div>;
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* CPU */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-primary" />
+            CPU
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <InfoRow label="Model" value={hardware?.cpu?.model || 'Unknown'} />
+          <InfoRow label="Cores" value={hardware?.cpu?.cores || '-'} />
+          <InfoRow label="Threads" value={hardware?.cpu?.threads || '-'} />
+          <InfoRow label="Frequency" value={hardware?.cpu?.frequency_mhz ? `${hardware.cpu.frequency_mhz} MHz` : '-'} />
+          <InfoRow label="Cache" value={hardware?.cpu?.cache || hardware?.cpu?.cache_mb ? `${hardware.cpu.cache_mb} MB` : '-'} />
+        </CardContent>
+      </Card>
+
+      {/* Memory */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <MemoryStick className="w-4 h-4 text-primary" />
+            Memory
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <InfoRow label="Total" value={hardware?.memory?.total_gb ? `${hardware.memory.total_gb} GB` : '-'} />
+          <InfoRow label="Type" value={hardware?.memory?.type || 'Unknown'} />
+          <InfoRow label="Speed" value={hardware?.memory?.speed_mhz || '-'} />
+          {hardware?.memory?.slots?.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-border">
+              <p className="text-xs font-mono uppercase text-muted-foreground mb-2">Memory Slots</p>
+              <div className="space-y-2">
+                {hardware.memory.slots.map((slot, idx) => (
+                  <div key={idx} className="flex justify-between text-sm">
+                    <span className="font-mono text-muted-foreground">{slot.slot}</span>
+                    <span className="font-mono">{slot.size_gb} GB - {slot.manufacturer || 'Unknown'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Motherboard */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Info className="w-4 h-4 text-primary" />
+            Motherboard
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <InfoRow label="Manufacturer" value={hardware?.motherboard?.manufacturer || 'Unknown'} />
+          <InfoRow label="Model" value={hardware?.motherboard?.model || 'Unknown'} />
+          <InfoRow label="BIOS Version" value={hardware?.motherboard?.bios_version || 'Unknown'} />
+        </CardContent>
+      </Card>
+
+      {/* Network Interfaces */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Network className="w-4 h-4 text-primary" />
+            Network Interfaces
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {hardware?.network_interfaces?.length > 0 ? (
+            <div className="space-y-4">
+              {hardware.network_interfaces.map((iface, idx) => (
+                <div key={idx} className="p-3 bg-secondary/30 rounded-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-mono font-bold">{iface.name}</span>
+                    <Badge variant={iface.status === 'up' ? 'success' : 'default'}>
+                      {iface.status || 'unknown'}
+                    </Badge>
+                  </div>
+                  <div className="text-sm font-mono text-muted-foreground space-y-1">
+                    <div>IP: {iface.ip || 'N/A'}</div>
+                    <div>MAC: {iface.mac || 'N/A'}</div>
+                    <div>Speed: {iface.speed || 'Unknown'}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground font-mono text-sm">No network interfaces found</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+const DisksTab = ({ serverId }) => {
+  const [disks, setDisks] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchDisks();
+  }, [serverId]);
+
+  const fetchDisks = async () => {
+    try {
+      const response = await serverAPI.getDisks(serverId);
+      setDisks(response.data);
+    } catch (err) {
+      console.error('Failed to load disk info');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="flex justify-center py-12"><Spinner size="lg" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      {disks.map((disk, idx) => (
+        <Card key={idx}>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <HardDrive className="w-4 h-4 text-primary" />
+                {disk.device}
+                <Badge variant={disk.type === 'SSD' ? 'info' : 'default'}>{disk.type}</Badge>
+              </CardTitle>
+              {disk.smart?.status && (
+                <Badge variant={disk.smart.status === 'PASSED' ? 'success' : 'danger'}>
+                  SMART: {disk.smart.status}
+                </Badge>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Disk Info */}
+              <div className="space-y-3">
+                <InfoRow label="Model" value={disk.model || 'Unknown'} />
+                <InfoRow label="Serial" value={disk.serial || 'Unknown'} />
+                <InfoRow label="Size" value={`${disk.size_gb} GB`} />
+                
+                {/* Partitions */}
+                {disk.partitions?.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-border">
+                    <p className="text-xs font-mono uppercase text-muted-foreground mb-3">Partitions</p>
+                    <div className="space-y-3">
+                      {disk.partitions.map((part, pidx) => (
+                        <div key={pidx}>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="font-mono">{part.mountpoint}</span>
+                            <span className="font-mono text-muted-foreground">
+                              {part.used_gb?.toFixed(1)} / {part.size_gb?.toFixed(1)} GB
+                            </span>
+                          </div>
+                          <ProgressBar value={part.percent} color="auto" showLabel={false} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* SMART Data */}
+              {disk.smart && (
+                <div className="p-4 bg-secondary/30 rounded-sm">
+                  <p className="text-xs font-mono uppercase text-muted-foreground mb-3 flex items-center gap-2">
+                    <Activity className="w-3 h-3" />
+                    SMART Data
+                  </p>
+                  <div className="space-y-2">
+                    {disk.smart.temperature_celsius && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-muted-foreground flex items-center gap-2">
+                          <Thermometer className="w-3 h-3" />
+                          Temperature
+                        </span>
+                        <span className={cn(
+                          "font-mono",
+                          disk.smart.temperature_celsius > 50 ? 'text-warning' : 'text-online'
+                        )}>
+                          {disk.smart.temperature_celsius}°C
+                        </span>
+                      </div>
+                    )}
+                    {disk.smart.power_on_hours && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Power On Hours</span>
+                        <span className="font-mono">{disk.smart.power_on_hours.toLocaleString()} h</span>
+                      </div>
+                    )}
+                    {disk.smart.power_cycle_count && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Power Cycles</span>
+                        <span className="font-mono">{disk.smart.power_cycle_count.toLocaleString()}</span>
+                      </div>
+                    )}
+                    {disk.smart.reallocated_sectors !== undefined && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Reallocated Sectors</span>
+                        <span className={cn(
+                          "font-mono",
+                          disk.smart.reallocated_sectors > 0 ? 'text-warning' : 'text-online'
+                        )}>
+                          {disk.smart.reallocated_sectors}
+                        </span>
+                      </div>
+                    )}
+                    {disk.smart.health_percent && (
+                      <div className="mt-3 pt-3 border-t border-border/50">
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="text-muted-foreground">Health</span>
+                          <span className="font-mono">{disk.smart.health_percent}%</span>
+                        </div>
+                        <ProgressBar value={disk.smart.health_percent} color="auto" showLabel={false} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+};
 
 const MonitoringTab = ({ serverId }) => {
   const [metricsHistory, setMetricsHistory] = useState([]);
@@ -763,21 +1081,6 @@ const LogsTab = ({ serverId }) => {
   );
 };
 
-const TasksTab = ({ serverId }) => {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm">Server Tasks</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-muted-foreground font-mono text-sm">
-          Tasks for this server will appear here. Create tasks from the Tasks page.
-        </p>
-      </CardContent>
-    </Card>
-  );
-};
-
 const DocumentationTab = ({ serverId }) => {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
@@ -826,7 +1129,7 @@ const DocumentationTab = ({ serverId }) => {
           <Textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            placeholder="# Server Documentation\n\nWrite your server documentation here using Markdown..."
+            placeholder="# Server Documentation&#10;&#10;Write your server documentation here using Markdown..."
             className="min-h-[400px]"
             data-testid="docs-textarea"
           />
