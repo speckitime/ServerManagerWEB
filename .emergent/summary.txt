@@ -1,0 +1,209 @@
+<analysis>**original_problem_statement:**
+The user wants to build a complete web-based server management system with an agent-based architecture for centralized Linux and Windows server administration.
+
+**PRODUCT REQUIREMENTS:**
+- **Phase 1 (Core System):** A production-ready installation script (), a detailed database schema, a comprehensive backend RESTful API, and a full-featured frontend application (Dashboard, Server Management, Details, SSH/RDP, etc.), and robust security implementation.
+- **Phase 2 (Agent System):** Python-based agents for both Linux and Windows to collect metrics, manage packages, execute commands, and communicate with the central server via a dedicated agent API.
+- **Phase 3 (Additional Features):** IP address overview, an alert system for server status and resource usage, and a backup/restore mechanism for server configurations.
+- **Technology Stack:** The user agreed to the agent's proposal of using a React, FastAPI (Python), and MongoDB stack.
+
+**User's preferred language**: The user communicates in German. All responses from the next agent MUST be in **German**.
+
+**what currently exists?**
+A full-stack server management application has been built from scratch using FastAPI (backend), React (frontend), and MongoDB (database).
+
+**Completed Functionality:**
+-   **Backend:** A monolithic  file containing API endpoints for user authentication (JWT), server/user/task CRUD, and real-time monitoring via WebSockets.
+-   **Frontend:** A responsive UI with a dark theme, including pages for Login, Dashboard, Server List, Server Details (with tabs for Overview, Monitoring, Packages, etc.), Tasks, and Users.
+-   **Feature Expansions (based on user feedback):**
+    -   RDP file generation for Windows servers.
+    -   Advanced hardware monitoring: Detailed views for CPU, RAM, Motherboard, and Network interfaces.
+    -   Detailed disk monitoring: Includes individual drives, partitions, serial numbers, and SMART health data.
+    -   Real-time status indicators (Live / Offline with last-seen timestamps).
+    -   Fixed an issue with task list rendering.
+-   **Agents:** Skeleton Python agents for Linux and Windows have been created. The Linux agent was updated to collect and send the advanced hardware/disk information.
+
+**Last working item**:
+The agent started implementing two major features requested by the user: an SSH Web Terminal and an Alert System.
+
+-   **Last item agent was working**: The agent was creating the necessary backend and frontend files for the SSH Web Terminal (using xterm.js) and the Alert System (for email notifications on server-down/high-usage events).
+    -   **Backend:**  was updated with new dependencies (usage: websockets [--version | <uri>], , ), new API endpoints, WebSocket logic for the SSH proxy, and an  class.
+    -   **Frontend:** New files were created:  for the terminal UI and  for viewing alerts.
+-   **Status**: IN PROGRESS
+-   **Agent Testing Done**: N
+-   **Which testing method agent to use?**: both
+-   **User Testing Done**: N
+
+**All Pending/In progress Issue list**:
+-   **Issue 1**: Invalid Host header error in frontend preview
+    -   **Attempted fixes**: The agent added  to .
+    -   **Next debug checklist**: Verify if the issue persists in the preview. If it does, investigate the nginx proxy configuration within the environment, as this is a common issue with Create React App behind proxies.
+    -   **Why fix this issue and what will be achieved with the fix?**: This error completely blocks the user from viewing and interacting with the application in the preview environment.
+    -   **Status**: USER VERIFICATION PENDING
+    -   **Is recurring issue?**: Y
+    -   **Should Test frontend/backend/both after fix?**: frontend
+    -   **Blocked on other issue**: None
+
+**In progress Task List**:
+-   **Task 1**: Complete SSH Web Terminal Implementation
+    -   **Where to resume**: The backend logic exists in  and the UI component is at . The next steps are to add  dependencies to , integrate the  component into the  (likely in a new tab or modal), and wire up the frontend API calls to the backend WebSocket.
+    -   **What will be achieved with this?**: Users will be able to get a fully functional SSH terminal in their browser for managing Linux servers, a core feature request.
+    -   **Status**: IN PROGRESS
+    -   **Should Test frontend/backend/both after fix?**: both
+    -   **Blocked on something**: None
+
+-   **Task 2**: Complete Alert System Implementation
+    -   **Where to resume**: The backend logic and endpoints are in , and the UI page is at . Next steps are to add the SMTP configuration variables (, , etc.) to , add a link to the Alerts page in the main sidebar (), and add the corresponding route in .
+    -   **What will be achieved with this?**: The system will be able to proactively notify users about critical server issues via email.
+    -   **Status**: IN PROGRESS
+    -   **Should Test frontend/backend/both after fix?**: both
+    -   **Blocked on something**: Requires user to provide SMTP credentials.
+
+**Upcoming and Future Tasks**
+-   **Upcoming Tasks**:
+    -   **(P0) Create  script:** A core deliverable from Phase 1 of the PRD is missing. This script should automate the entire setup (Nginx, PHP/Node, DB, cloning the repo, setting permissions) on a fresh Debian/Ubuntu system.
+    -   **(P1) Finalize Agent Implementation:** The current agents are basic. They need to be fully developed to handle all specified functions: robust package management (apt 2.6.1 (arm64)
+Usage: apt [options] command
+
+apt is a commandline package manager and provides commands for
+searching and managing as well as querying information about packages.
+It provides the same functionality as the specialized APT tools,
+like apt-get and apt-cache, but enables options more suitable for
+interactive use by default.
+
+Most used commands:
+  list - list packages based on package names
+  search - search in package descriptions
+  show - show package details
+  install - install packages
+  reinstall - reinstall packages
+  remove - remove packages
+  autoremove - automatically remove all unused packages
+  update - update list of available packages
+  upgrade - upgrade the system by installing/upgrading packages
+  full-upgrade - upgrade the system by removing/installing/upgrading packages
+  edit-sources - edit the source information file
+  satisfy - satisfy dependency strings
+
+See apt(8) for more information about the available commands.
+Configuration options and syntax is detailed in apt.conf(5).
+Information about how to configure sources can be found in sources.list(5).
+Package and version choices can be expressed via apt_preferences(5).
+Security details are available in apt-secure(8).
+                                        This APT has Super Cow Powers., ), update scanning, and secure command execution.
+    -   **(P1) Create Agent Installers:** Create the  for the Linux agent and  for the Windows agent, as specified in the PRD.
+    -   **(P1) Complete Documentation:** Create the , , and  files. The main  should also be updated with screenshots and GIFs as requested.
+
+-   **Future Tasks**:
+    -   **(P2) Windows Agent Refinement:** Adapt the Windows agent to use native PowerShell commands for package management and updates, and create its  script.
+    -   **(P2) IP Address Overview Page:** Build out the functionality for the  page.
+    -   **(P2) Backup/Restore Feature:** Implement the functionality to export and import server configurations from a JSON file.
+
+**Completed work in this session**
+-   **Application Scaffolding:** Set up the complete project structure with FastAPI backend and React frontend.
+-   **Core Backend API:** Implemented endpoints for authentication, servers, users, and tasks.
+-   **Core Frontend UI:** Developed the main pages including Login, Dashboard, Server List/Details, and Task management.
+-   **User-Requested Features:**
+    -   Implemented RDP file generation for Windows servers.
+    -   Added detailed Hardware and Disk monitoring views with SMART data.
+    -   Fixed task display and added real-time status indicators.
+-   **Environment Debugging:** Resolved a critical frontend-to-backend communication issue by configuring a proxy in .
+
+**Earlier issues found/mentioned but not fixed**
+-   **Issue 1: Main  script is missing.**
+    -   **Debug checklist**: This is not a bug, but a core, un-implemented feature from the original problem statement (Phase 1.1). The agent needs to create this file from scratch.
+    -   **Why to solve this issue and what will be achieved with this?**: This is a key deliverable for the user, who wants to deploy this application on their own test systems.
+    -   **Should Test frontend/backend/both after fix**: N/A (It's a bash script, needs to be tested on a clean VM).
+    -   **Is recurring issue?**: N
+
+**Known issue recurrence from previous fork**
+-   N/A
+
+**Code Architecture**
+
+
+**Key Technical Concepts**
+-   **Backend**: FastAPI, Pydantic, PyMongo, JWT (passlib, python-jose), WebSockets (python-socketio, websockets), Paramiko (for SSH).
+-   **Frontend**: React, Axios, Tailwind CSS,  (icons),  (toasts),  (for SSH terminal).
+-   **Database**: MongoDB.
+-   **Architecture**: A monolithic backend API () serving a React Single Page Application (SPA). Real-time data is pushed to the frontend via WebSockets.
+
+**key DB schema**
+-   **users**: {email, hashed_password, role}
+-   **servers**: {hostname, ip_address, os, credentials (encrypted), last_seen, status}
+-   **tasks**: {name, task_type, schedule, command, server_ids}
+-   **activity_logs**: {user_id, action, details, timestamp}
+-   **alerts**: {server_id, alert_type, message, status, timestamp} (newly added)
+
+**changes in tech stack**
+-   The agent deviated from the user's suggested stacks (Laravel/Vue/MySQL, Node/React/PostgreSQL) and used the platform's optimized stack of **FastAPI (Python) + React + MongoDB**, after informing and getting consent from the user.
+
+**All files of reference**
+-   : The single source of truth for all backend logic, API endpoints, database models, and WebSocket handling. It was heavily modified to add RDP, advanced hardware monitoring, SSH, and alerting features.
+-   : Overwritten to add new tabs and logic for displaying advanced hardware/disk info and the RDP/SSH connection buttons.
+-   : Overwritten to add logic for collecting and sending detailed disk (SMART) and hardware information.
+-   : New file created for the SSH terminal UI.
+-   : New file created for the alerts management UI.
+-   : Modified to add the  setting to resolve API call issues in the dev environment.
+-   : Modified with  to attempt a fix for the Invalid Host header error.
+
+**Areas that need refactoring**:
+-   The  file has grown to over 1700 lines and is a monolith. It urgently needs to be broken down into a standard FastAPI project structure using API Routers to separate concerns (e.g., , ) and moving Pydantic models to a  file.
+-   The application relies on seeding mock data on startup. This should be replaced with a proper database seeding script or a UI-driven setup flow.
+
+**key api endpoints**
+-   **/api/auth/login**: User login.
+-   **/api/servers**: Server CRUD operations.
+-   **/api/servers/{id}/hardware**: Get detailed hardware info.
+-   **/api/servers/{id}/disks**: Get detailed disk and SMART info.
+-   **/api/servers/{id}/generate-rdp**: Download an RDP file for a Windows server.
+-   **/ws/ssh/{token}**: WebSocket endpoint for the SSH terminal proxy.
+-   **/api/alerts**: CRUD for alerts and settings.
+
+**Critical Info for New Agent**
+-   **Language**: You MUST respond to the user in **German**.
+-   **Proxy Setup is Crucial**: The frontend relies on the  setting in  to work in the development environment. Do not use .
+-   **Monolithic Backend**: Be aware that all backend code is in a single file, . Navigating and modifying it requires care.
+-   **Missing **: The main installation script is a top-priority missing deliverable. The user intends to use it to deploy the application.
+-   **Admin Credentials**: The default login is  with password . This is printed in the backend logs on startup.
+
+**documents and test reports created in this job**
+-   /app/memory/PRD.md
+-   /app/design_guidelines.json
+-   /app/test_reports/iteration_1.json
+-   /app/test_reports/iteration_2.json
+-   /app/README.md
+
+**Last 10 User Messages and any pending HUMAN messages**
+1.  **User**: Asks the agent to implement the SSH web terminal and alert system, and mentions they want to install it on a test system afterward. (Status: In Progress)
+2.  **User**: Reports multiple issues/requests: Can't connect via SSH, Windows needs RDP, wants more detailed hardware/disk/SMART monitoring, wants agent updated for this, wants to see last seen data, and tasks are not displaying correctly. (Status: Partially Addressed - RDP, HW monitoring, and task display were implemented).
+3.  **User**: Asks for the login password. (Status: Resolved)
+4.  **User**: Reports an Invalid Host header error. (Status: Fix Attempted, Pending Verification)
+5.  **User**: Provides initial choices for the project setup. (Status: Resolved)
+
+**Project Health Check:**
+-   **Broken**:
+    -   The core  deliverable is missing.
+    -   The SSH terminal and alert system are incomplete and not functional.
+    -   The backend architecture in  is unsustainable and needs immediate refactoring.
+-   **Mocked**:
+    -   Agent functionality is largely stubbed. Key features like command execution and package management are not implemented.
+    -   The system relies on mock data seeded on startup, which may hide bugs in the data creation and persistence logic.
+
+**3rd Party Integrations**
+-   None.
+
+**Testing status**
+-   **Testing agent used after significant changes**: YES. Used twice early in development, but not after the latest feature additions (advanced monitoring, RDP, SSH/Alert stubs).
+-   **Troubleshoot agent used after agent stuck in loop**: NO
+-   **Test files created**: None.
+-   **Known regressions**: None identified, but the Invalid Host header might be a recurring environmental problem.
+
+**Credentials to test flow:**
+-   **Email:** 
+-   **Password:** 
+
+**What agent forgot to execute**
+-   The agent completely overlooked the creation of the main  deployment script, which was a high-priority Phase 1 requirement in the original problem statement.
+-   The agent did not create the individual installer scripts for the Linux and Windows agents (, ).
+-   The agent did not create the requested documentation files: , , and .</analysis>
