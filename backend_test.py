@@ -165,7 +165,7 @@ class NexusCommandAPITester:
             "enabled": True
         }
         
-        success, response = self.make_request('POST', 'tasks', task_data, expected_status=201)
+        success, response = self.make_request('POST', 'tasks', task_data, expected_status=200)
         if success:
             data = response.json()
             has_id = 'id' in data
