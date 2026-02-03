@@ -6,3 +6,4 @@ export { default as TasksPage } from './TasksPage';
 export { default as UsersPage } from './UsersPage';
 export { default as IPOverviewPage } from './IPOverviewPage';
 export { default as SettingsPage } from './SettingsPage';
+export { default as AlertsPage } from './AlertsPage';

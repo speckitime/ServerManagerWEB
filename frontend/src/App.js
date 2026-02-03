@@ -9,7 +9,8 @@ import {
   TasksPage,
   UsersPage,
   IPOverviewPage,
-  SettingsPage
+  SettingsPage,
+  AlertsPage
 } from './pages';
 import { Spinner } from './components/ui';
 import './App.css';
@@ -100,6 +101,14 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <SettingsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/alerts"
+        element={
+          <ProtectedRoute>
+            <AlertsPage />
           </ProtectedRoute>
         }
       />

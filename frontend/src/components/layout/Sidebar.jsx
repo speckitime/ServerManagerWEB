@@ -10,7 +10,8 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
-  Terminal
+  Terminal,
+  Bell
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { cn } from '../../utils/helpers';
@@ -19,6 +20,7 @@ const menuItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
   { icon: Server, label: 'Servers', path: '/servers' },
   { icon: ListTodo, label: 'Tasks', path: '/tasks' },
+  { icon: Bell, label: 'Alerts', path: '/alerts' },
   { icon: Network, label: 'IP Overview', path: '/ip-overview' },
   { icon: Users, label: 'Users', path: '/users', adminOnly: true },
   { icon: Settings, label: 'Settings', path: '/settings' }
