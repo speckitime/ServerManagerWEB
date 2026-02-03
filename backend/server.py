@@ -405,6 +405,47 @@ async def lifespan(app: FastAPI):
             }
         })
     
+    # Create demo tasks
+    demo_task_exists = tasks_collection.find_one({"name": "Daily System Updates"})
+    if not demo_task_exists:
+        # Get server IDs for tasks
+        all_servers = list(servers_collection.find({}, {"_id": 1}))
+        server_ids = [str(s["_id"]) for s in all_servers]
+        
+        tasks_collection.insert_one({
+            "name": "Daily System Updates",
+            "task_type": "update",
+            "command": "apt update && apt upgrade -y",
+            "schedule": "0 3 * * *",
+            "server_ids": server_ids[:2] if len(server_ids) >= 2 else server_ids,
+            "enabled": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_run": datetime.now(timezone.utc).isoformat(),
+            "next_run": None
+        })
+        tasks_collection.insert_one({
+            "name": "Weekly Reboot",
+            "task_type": "reboot",
+            "command": "shutdown -r now",
+            "schedule": "0 4 * * 0",
+            "server_ids": server_ids[:1] if server_ids else [],
+            "enabled": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_run": None,
+            "next_run": None
+        })
+        tasks_collection.insert_one({
+            "name": "Cleanup Logs",
+            "task_type": "custom",
+            "command": "find /var/log -name '*.log' -mtime +30 -delete",
+            "schedule": "0 2 1 * *",
+            "server_ids": server_ids,
+            "enabled": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_run": None,
+            "next_run": None
+        })
+    
     yield
     
     # Cleanup
