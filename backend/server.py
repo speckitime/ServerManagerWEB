@@ -1,0 +1,1173 @@
+"""
+Nexus Command - Server Management System Backend
+FastAPI + MongoDB + WebSocket for real-time updates
+"""
+
+import os
+import json
+import secrets
+import hashlib
+from datetime import datetime, timezone, timedelta
+from typing import Optional, List
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Depends, status, WebSocket, WebSocketDisconnect, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field, EmailStr
+from pydantic_settings import BaseSettings
+from pymongo import MongoClient, DESCENDING, ASCENDING
+from bson import ObjectId
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+from cryptography.fernet import Fernet
+import socketio
+
+# ========================
+# Configuration
+# ========================
+
+class Settings(BaseSettings):
+    MONGO_URL: str
+    DB_NAME: str
+    JWT_SECRET: str = "nexus_command_secret_key_change_in_production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRATION_HOURS: int = 24
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+
+# Encryption key for credentials
+ENCRYPTION_KEY = Fernet.generate_key()
+fernet = Fernet(ENCRYPTION_KEY)
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# JWT
+security = HTTPBearer()
+
+# MongoDB Connection
+client = MongoClient(settings.MONGO_URL)
+db = client[settings.DB_NAME]
+
+# Collections
+users_collection = db["users"]
+servers_collection = db["servers"]
+server_groups_collection = db["server_groups"]
+server_metrics_collection = db["server_metrics"]
+server_logs_collection = db["server_logs"]
+packages_collection = db["packages"]
+updates_collection = db["updates"]
+tasks_collection = db["tasks"]
+task_logs_collection = db["task_logs"]
+documentation_collection = db["documentation"]
+activity_logs_collection = db["activity_logs"]
+
+# Create indexes
+users_collection.create_index("email", unique=True)
+servers_collection.create_index("hostname")
+server_metrics_collection.create_index([("server_id", ASCENDING), ("timestamp", DESCENDING)])
+activity_logs_collection.create_index([("user_id", ASCENDING), ("timestamp", DESCENDING)])
+
+# ========================
+# Socket.IO Setup
+# ========================
+
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins='*'
+)
+
+# ========================
+# Pydantic Models
+# ========================
+
+class UserBase(BaseModel):
+    email: EmailStr
+    username: str
+    role: str = "user"  # admin, user, readonly
+
+class UserCreate(UserBase):
+    password: str
+
+class UserUpdate(BaseModel):
+    email: Optional[EmailStr] = None
+    username: Optional[str] = None
+    role: Optional[str] = None
+    password: Optional[str] = None
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    username: str
+    role: str
+    created_at: str
+    last_login: Optional[str] = None
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+class ServerBase(BaseModel):
+    hostname: str
+    ip_address: str
+    os_type: str  # linux, windows
+    os_version: Optional[str] = None
+    description: Optional[str] = None
+    ssh_port: int = 22
+    ssh_username: Optional[str] = None
+    ssh_password: Optional[str] = None
+    group_id: Optional[str] = None
+    tags: List[str] = []
+
+class ServerCreate(ServerBase):
+    pass
+
+class ServerUpdate(BaseModel):
+    hostname: Optional[str] = None
+    ip_address: Optional[str] = None
+    os_type: Optional[str] = None
+    os_version: Optional[str] = None
+    description: Optional[str] = None
+    ssh_port: Optional[int] = None
+    ssh_username: Optional[str] = None
+    ssh_password: Optional[str] = None
+    group_id: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+class ServerResponse(BaseModel):
+    id: str
+    hostname: str
+    ip_address: str
+    os_type: str
+    os_version: Optional[str] = None
+    description: Optional[str] = None
+    ssh_port: int
+    status: str = "unknown"
+    group_id: Optional[str] = None
+    tags: List[str] = []
+    last_seen: Optional[str] = None
+    created_at: str
+    metrics: Optional[dict] = None
+
+class ServerGroupBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    color: str = "#22C55E"
+
+class ServerGroupResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    color: str
+    server_count: int = 0
+
+class MetricsData(BaseModel):
+    server_id: str
+    cpu_percent: float
+    memory_percent: float
+    memory_used: int
+    memory_total: int
+    disk_percent: float
+    disk_used: int
+    disk_total: int
+    network_bytes_sent: int
+    network_bytes_recv: int
+    processes: List[dict] = []
+
+class TaskBase(BaseModel):
+    name: str
+    task_type: str  # update, reboot, custom
+    command: Optional[str] = None
+    schedule: Optional[str] = None  # cron expression
+    server_ids: List[str] = []
+    enabled: bool = True
+
+class TaskCreate(TaskBase):
+    pass
+
+class TaskUpdate(BaseModel):
+    name: Optional[str] = None
+    task_type: Optional[str] = None
+    command: Optional[str] = None
+    schedule: Optional[str] = None
+    server_ids: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+class TaskResponse(BaseModel):
+    id: str
+    name: str
+    task_type: str
+    command: Optional[str] = None
+    schedule: Optional[str] = None
+    server_ids: List[str]
+    enabled: bool
+    last_run: Optional[str] = None
+    next_run: Optional[str] = None
+    created_at: str
+
+class DocumentationUpdate(BaseModel):
+    content: str
+    content_type: str = "markdown"  # markdown, html
+
+class AgentRegisterRequest(BaseModel):
+    hostname: str
+    ip_address: str
+    os_type: str
+    os_version: str
+
+class AgentMetricsRequest(BaseModel):
+    api_key: str
+    metrics: MetricsData
+
+# ========================
+# Helper Functions
+# ========================
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(hours=settings.JWT_EXPIRATION_HOURS)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+def verify_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        return payload
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    payload = verify_token(credentials.credentials)
+    user = users_collection.find_one({"_id": ObjectId(payload["sub"])}, {"_id": 0, "password": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    user["id"] = payload["sub"]
+    return user
+
+def encrypt_credential(value: str) -> str:
+    return fernet.encrypt(value.encode()).decode()
+
+def decrypt_credential(value: str) -> str:
+    return fernet.decrypt(value.encode()).decode()
+
+def serialize_server(server: dict) -> dict:
+    return {
+        "id": str(server["_id"]),
+        "hostname": server["hostname"],
+        "ip_address": server["ip_address"],
+        "os_type": server["os_type"],
+        "os_version": server.get("os_version"),
+        "description": server.get("description"),
+        "ssh_port": server.get("ssh_port", 22),
+        "status": server.get("status", "unknown"),
+        "group_id": server.get("group_id"),
+        "tags": server.get("tags", []),
+        "last_seen": server.get("last_seen"),
+        "created_at": server.get("created_at"),
+        "metrics": server.get("metrics")
+    }
+
+def log_activity(user_id: str, action: str, details: dict = None):
+    activity_logs_collection.insert_one({
+        "user_id": user_id,
+        "action": action,
+        "details": details or {},
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    })
+
+# ========================
+# App Lifespan
+# ========================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create default admin user if not exists
+    admin_exists = users_collection.find_one({"email": "admin@nexuscommand.local"})
+    if not admin_exists:
+        admin_password = secrets.token_urlsafe(12)
+        users_collection.insert_one({
+            "email": "admin@nexuscommand.local",
+            "username": "admin",
+            "password": pwd_context.hash(admin_password),
+            "role": "admin",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_login": None
+        })
+        print(f"\n{'='*50}")
+        print("DEFAULT ADMIN CREDENTIALS")
+        print(f"Email: admin@nexuscommand.local")
+        print(f"Password: {admin_password}")
+        print(f"{'='*50}\n")
+    
+    # Create demo server for testing
+    demo_exists = servers_collection.find_one({"hostname": "demo-server"})
+    if not demo_exists:
+        servers_collection.insert_one({
+            "hostname": "demo-server",
+            "ip_address": "192.168.1.100",
+            "os_type": "linux",
+            "os_version": "Ubuntu 22.04",
+            "description": "Demo server for testing",
+            "ssh_port": 22,
+            "status": "online",
+            "tags": ["demo", "linux"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+            "metrics": {
+                "cpu_percent": 25.5,
+                "memory_percent": 45.2,
+                "memory_used": 4000000000,
+                "memory_total": 8000000000,
+                "disk_percent": 55.0,
+                "disk_used": 50000000000,
+                "disk_total": 100000000000
+            }
+        })
+        # Add second demo server
+        servers_collection.insert_one({
+            "hostname": "prod-web-01",
+            "ip_address": "10.0.0.15",
+            "os_type": "linux",
+            "os_version": "Debian 12",
+            "description": "Production web server",
+            "ssh_port": 22,
+            "status": "online",
+            "tags": ["production", "web"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+            "metrics": {
+                "cpu_percent": 65.3,
+                "memory_percent": 78.1,
+                "memory_used": 6200000000,
+                "memory_total": 8000000000,
+                "disk_percent": 40.0,
+                "disk_used": 40000000000,
+                "disk_total": 100000000000
+            }
+        })
+        # Windows server demo
+        servers_collection.insert_one({
+            "hostname": "win-dc-01",
+            "ip_address": "10.0.0.20",
+            "os_type": "windows",
+            "os_version": "Windows Server 2022",
+            "description": "Domain Controller",
+            "ssh_port": 3389,
+            "status": "offline",
+            "tags": ["windows", "domain"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metrics": {
+                "cpu_percent": 12.0,
+                "memory_percent": 35.5,
+                "memory_used": 5500000000,
+                "memory_total": 16000000000,
+                "disk_percent": 25.0,
+                "disk_used": 50000000000,
+                "disk_total": 200000000000
+            }
+        })
+    
+    yield
+    
+    # Cleanup
+    client.close()
+
+# ========================
+# FastAPI App
+# ========================
+
+app = FastAPI(
+    title="Nexus Command API",
+    description="Server Management System API",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount Socket.IO
+socket_app = socketio.ASGIApp(sio, app)
+
+# ========================
+# Auth Endpoints
+# ========================
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login(request: LoginRequest):
+    user = users_collection.find_one({"email": request.email})
+    if not user or not pwd_context.verify(request.password, user["password"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    users_collection.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"last_login": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    token = create_access_token({"sub": str(user["_id"])})
+    
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": str(user["_id"]),
+            "email": user["email"],
+            "username": user["username"],
+            "role": user["role"],
+            "created_at": user["created_at"],
+            "last_login": datetime.now(timezone.utc).isoformat()
+        }
+    }
+
+@app.post("/api/auth/logout")
+async def logout(current_user: dict = Depends(get_current_user)):
+    log_activity(current_user["id"], "logout")
+    return {"message": "Logged out successfully"}
+
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    user = users_collection.find_one({"_id": ObjectId(current_user["id"])})
+    return {
+        "id": str(user["_id"]),
+        "email": user["email"],
+        "username": user["username"],
+        "role": user["role"],
+        "created_at": user["created_at"],
+        "last_login": user.get("last_login")
+    }
+
+# ========================
+# Server Endpoints
+# ========================
+
+@app.get("/api/servers")
+async def list_servers(
+    current_user: dict = Depends(get_current_user),
+    status: Optional[str] = None,
+    os_type: Optional[str] = None,
+    group_id: Optional[str] = None,
+    search: Optional[str] = None
+):
+    query = {}
+    if status:
+        query["status"] = status
+    if os_type:
+        query["os_type"] = os_type
+    if group_id:
+        query["group_id"] = group_id
+    if search:
+        query["$or"] = [
+            {"hostname": {"$regex": search, "$options": "i"}},
+            {"ip_address": {"$regex": search, "$options": "i"}}
+        ]
+    
+    servers = list(servers_collection.find(query))
+    return [serialize_server(s) for s in servers]
+
+@app.post("/api/servers", response_model=ServerResponse)
+async def create_server(server: ServerCreate, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    server_data = server.model_dump()
+    
+    # Encrypt credentials if provided
+    if server_data.get("ssh_password"):
+        server_data["ssh_password"] = encrypt_credential(server_data["ssh_password"])
+    
+    server_data["status"] = "unknown"
+    server_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    server_data["api_key"] = secrets.token_urlsafe(32)
+    
+    result = servers_collection.insert_one(server_data)
+    server_data["id"] = str(result.inserted_id)
+    
+    log_activity(current_user["id"], "server_created", {"server_id": server_data["id"], "hostname": server.hostname})
+    
+    return serialize_server({**server_data, "_id": result.inserted_id})
+
+@app.get("/api/servers/{server_id}", response_model=ServerResponse)
+async def get_server(server_id: str, current_user: dict = Depends(get_current_user)):
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return serialize_server(server)
+
+@app.put("/api/servers/{server_id}", response_model=ServerResponse)
+async def update_server(server_id: str, update: ServerUpdate, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    
+    if update_data.get("ssh_password"):
+        update_data["ssh_password"] = encrypt_credential(update_data["ssh_password"])
+    
+    result = servers_collection.update_one(
+        {"_id": ObjectId(server_id)},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    log_activity(current_user["id"], "server_updated", {"server_id": server_id})
+    
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    return serialize_server(server)
+
+@app.delete("/api/servers/{server_id}")
+async def delete_server(server_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    result = servers_collection.delete_one({"_id": ObjectId(server_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    log_activity(current_user["id"], "server_deleted", {"server_id": server_id})
+    return {"message": "Server deleted"}
+
+@app.get("/api/servers/{server_id}/status")
+async def get_server_status(server_id: str, current_user: dict = Depends(get_current_user)):
+    server = servers_collection.find_one({"_id": ObjectId(server_id)}, {"_id": 0, "status": 1, "last_seen": 1, "metrics": 1})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return server
+
+# ========================
+# Monitoring Endpoints
+# ========================
+
+@app.get("/api/servers/{server_id}/metrics")
+async def get_server_metrics(server_id: str, current_user: dict = Depends(get_current_user)):
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return server.get("metrics", {})
+
+@app.get("/api/servers/{server_id}/metrics/history")
+async def get_metrics_history(
+    server_id: str,
+    period: str = "24h",
+    current_user: dict = Depends(get_current_user)
+):
+    # Calculate time range
+    hours = int(period.replace("h", "")) if "h" in period else 24
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    
+    metrics = list(server_metrics_collection.find(
+        {
+            "server_id": server_id,
+            "timestamp": {"$gte": since.isoformat()}
+        },
+        {"_id": 0}
+    ).sort("timestamp", ASCENDING).limit(500))
+    
+    return metrics
+
+@app.get("/api/servers/{server_id}/processes")
+async def get_server_processes(server_id: str, current_user: dict = Depends(get_current_user)):
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    # Return mock processes for demo
+    return [
+        {"pid": 1, "name": "systemd", "cpu_percent": 0.1, "memory_percent": 0.5, "status": "running"},
+        {"pid": 234, "name": "nginx", "cpu_percent": 2.3, "memory_percent": 1.2, "status": "running"},
+        {"pid": 456, "name": "postgres", "cpu_percent": 5.1, "memory_percent": 8.4, "status": "running"},
+        {"pid": 789, "name": "python3", "cpu_percent": 12.4, "memory_percent": 4.2, "status": "running"},
+        {"pid": 1024, "name": "node", "cpu_percent": 8.7, "memory_percent": 6.1, "status": "running"}
+    ]
+
+@app.get("/api/servers/{server_id}/network")
+async def get_server_network(server_id: str, current_user: dict = Depends(get_current_user)):
+    server = servers_collection.find_one({"_id": ObjectId(server_id)})
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    return {
+        "bytes_sent": 1500000000,
+        "bytes_recv": 3200000000,
+        "packets_sent": 1200000,
+        "packets_recv": 2500000,
+        "connections": 45
+    }
+
+# ========================
+# Package Management Endpoints
+# ========================
+
+@app.get("/api/servers/{server_id}/packages")
+async def get_server_packages(
+    server_id: str,
+    search: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    query = {"server_id": server_id}
+    if search:
+        query["name"] = {"$regex": search, "$options": "i"}
+    
+    packages = list(packages_collection.find(query, {"_id": 0}))
+    
+    # Return demo packages if none
+    if not packages:
+        return [
+            {"name": "nginx", "version": "1.24.0", "installed": True, "update_available": True, "new_version": "1.25.3"},
+            {"name": "postgresql-15", "version": "15.4", "installed": True, "update_available": False},
+            {"name": "python3", "version": "3.11.6", "installed": True, "update_available": True, "new_version": "3.11.7"},
+            {"name": "nodejs", "version": "20.10.0", "installed": True, "update_available": False},
+            {"name": "docker-ce", "version": "24.0.7", "installed": True, "update_available": True, "new_version": "25.0.0"}
+        ]
+    return packages
+
+@app.get("/api/servers/{server_id}/updates")
+async def get_server_updates(server_id: str, current_user: dict = Depends(get_current_user)):
+    updates = list(updates_collection.find({"server_id": server_id}, {"_id": 0}))
+    
+    if not updates:
+        return [
+            {"package": "nginx", "current_version": "1.24.0", "new_version": "1.25.3", "severity": "low"},
+            {"package": "python3", "current_version": "3.11.6", "new_version": "3.11.7", "severity": "medium"},
+            {"package": "docker-ce", "current_version": "24.0.7", "new_version": "25.0.0", "severity": "high"},
+            {"package": "linux-kernel", "current_version": "6.2.0", "new_version": "6.5.0", "severity": "critical"}
+        ]
+    return updates
+
+@app.post("/api/servers/{server_id}/updates/scan")
+async def scan_updates(server_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    # In real implementation, this would queue a command to the agent
+    log_activity(current_user["id"], "update_scan", {"server_id": server_id})
+    return {"message": "Update scan initiated", "status": "queued"}
+
+@app.post("/api/servers/{server_id}/updates/install")
+async def install_updates(
+    server_id: str,
+    packages: Optional[List[str]] = None,
+    install_all: bool = False,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    log_activity(current_user["id"], "update_install", {
+        "server_id": server_id,
+        "packages": packages,
+        "install_all": install_all
+    })
+    return {"message": "Update installation queued", "status": "queued"}
+
+# ========================
+# Logs Endpoints
+# ========================
+
+@app.get("/api/servers/{server_id}/logs")
+async def get_available_logs(server_id: str, current_user: dict = Depends(get_current_user)):
+    # Return common log files
+    return [
+        {"name": "syslog", "path": "/var/log/syslog", "size": "2.5 MB"},
+        {"name": "auth.log", "path": "/var/log/auth.log", "size": "1.2 MB"},
+        {"name": "nginx/access.log", "path": "/var/log/nginx/access.log", "size": "5.8 MB"},
+        {"name": "nginx/error.log", "path": "/var/log/nginx/error.log", "size": "0.3 MB"},
+        {"name": "dmesg", "path": "/var/log/dmesg", "size": "0.1 MB"}
+    ]
+
+@app.get("/api/servers/{server_id}/logs/{filename}")
+async def get_log_content(
+    server_id: str,
+    filename: str,
+    lines: int = 100,
+    current_user: dict = Depends(get_current_user)
+):
+    # Mock log content
+    log_lines = [
+        f"2024-01-15 10:23:{i:02d} INFO Server started successfully",
+        f"2024-01-15 10:24:{i:02d} DEBUG Processing request from 192.168.1.50",
+        f"2024-01-15 10:25:{i:02d} WARN High memory usage detected: 85%",
+        f"2024-01-15 10:26:{i:02d} INFO Connection established to database",
+        f"2024-01-15 10:27:{i:02d} ERROR Failed to connect to remote service"
+    ]
+    return {"filename": filename, "content": "\n".join(log_lines[:lines])}
+
+# ========================
+# Tasks Endpoints
+# ========================
+
+@app.get("/api/tasks")
+async def list_tasks(current_user: dict = Depends(get_current_user)):
+    tasks = list(tasks_collection.find())
+    return [{
+        "id": str(t["_id"]),
+        "name": t["name"],
+        "task_type": t["task_type"],
+        "command": t.get("command"),
+        "schedule": t.get("schedule"),
+        "server_ids": t.get("server_ids", []),
+        "enabled": t.get("enabled", True),
+        "last_run": t.get("last_run"),
+        "next_run": t.get("next_run"),
+        "created_at": t["created_at"]
+    } for t in tasks]
+
+@app.post("/api/tasks", response_model=TaskResponse)
+async def create_task(task: TaskCreate, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    task_data = task.model_dump()
+    task_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    task_data["created_by"] = current_user["id"]
+    
+    result = tasks_collection.insert_one(task_data)
+    task_data["id"] = str(result.inserted_id)
+    
+    log_activity(current_user["id"], "task_created", {"task_id": task_data["id"], "name": task.name})
+    
+    return {**task_data, "last_run": None, "next_run": None}
+
+@app.get("/api/tasks/{task_id}", response_model=TaskResponse)
+async def get_task(task_id: str, current_user: dict = Depends(get_current_user)):
+    task = tasks_collection.find_one({"_id": ObjectId(task_id)})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    return {
+        "id": str(task["_id"]),
+        "name": task["name"],
+        "task_type": task["task_type"],
+        "command": task.get("command"),
+        "schedule": task.get("schedule"),
+        "server_ids": task.get("server_ids", []),
+        "enabled": task.get("enabled", True),
+        "last_run": task.get("last_run"),
+        "next_run": task.get("next_run"),
+        "created_at": task["created_at"]
+    }
+
+@app.put("/api/tasks/{task_id}", response_model=TaskResponse)
+async def update_task(task_id: str, update: TaskUpdate, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    
+    result = tasks_collection.update_one(
+        {"_id": ObjectId(task_id)},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task = tasks_collection.find_one({"_id": ObjectId(task_id)})
+    return {
+        "id": str(task["_id"]),
+        "name": task["name"],
+        "task_type": task["task_type"],
+        "command": task.get("command"),
+        "schedule": task.get("schedule"),
+        "server_ids": task.get("server_ids", []),
+        "enabled": task.get("enabled", True),
+        "last_run": task.get("last_run"),
+        "next_run": task.get("next_run"),
+        "created_at": task["created_at"]
+    }
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    result = tasks_collection.delete_one({"_id": ObjectId(task_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    log_activity(current_user["id"], "task_deleted", {"task_id": task_id})
+    return {"message": "Task deleted"}
+
+@app.post("/api/tasks/{task_id}/execute")
+async def execute_task(task_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    task = tasks_collection.find_one({"_id": ObjectId(task_id)})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Queue task execution
+    log_activity(current_user["id"], "task_executed", {"task_id": task_id})
+    return {"message": "Task execution queued", "status": "queued"}
+
+# ========================
+# Documentation Endpoints
+# ========================
+
+@app.get("/api/servers/{server_id}/documentation")
+async def get_documentation(server_id: str, current_user: dict = Depends(get_current_user)):
+    doc = documentation_collection.find_one({"server_id": server_id}, {"_id": 0})
+    if not doc:
+        return {"content": "", "content_type": "markdown", "updated_at": None}
+    return doc
+
+@app.put("/api/servers/{server_id}/documentation")
+async def update_documentation(
+    server_id: str,
+    doc: DocumentationUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    documentation_collection.update_one(
+        {"server_id": server_id},
+        {
+            "$set": {
+                "content": doc.content,
+                "content_type": doc.content_type,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_by": current_user["id"]
+            }
+        },
+        upsert=True
+    )
+    
+    log_activity(current_user["id"], "documentation_updated", {"server_id": server_id})
+    return {"message": "Documentation updated"}
+
+# ========================
+# User Management Endpoints
+# ========================
+
+@app.get("/api/users")
+async def list_users(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    users = list(users_collection.find({}, {"password": 0}))
+    return [{
+        "id": str(u["_id"]),
+        "email": u["email"],
+        "username": u["username"],
+        "role": u["role"],
+        "created_at": u["created_at"],
+        "last_login": u.get("last_login")
+    } for u in users]
+
+@app.post("/api/users", response_model=UserResponse)
+async def create_user(user: UserCreate, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    existing = users_collection.find_one({"email": user.email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    user_data = user.model_dump()
+    user_data["password"] = pwd_context.hash(user_data["password"])
+    user_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    
+    result = users_collection.insert_one(user_data)
+    
+    log_activity(current_user["id"], "user_created", {"user_id": str(result.inserted_id)})
+    
+    return {
+        "id": str(result.inserted_id),
+        "email": user.email,
+        "username": user.username,
+        "role": user.role,
+        "created_at": user_data["created_at"],
+        "last_login": None
+    }
+
+@app.put("/api/users/{user_id}", response_model=UserResponse)
+async def update_user(user_id: str, update: UserUpdate, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "admin" and current_user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    
+    if "password" in update_data:
+        update_data["password"] = pwd_context.hash(update_data["password"])
+    
+    result = users_collection.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user = users_collection.find_one({"_id": ObjectId(user_id)})
+    return {
+        "id": str(user["_id"]),
+        "email": user["email"],
+        "username": user["username"],
+        "role": user["role"],
+        "created_at": user["created_at"],
+        "last_login": user.get("last_login")
+    }
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    if current_user["id"] == user_id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    
+    result = users_collection.delete_one({"_id": ObjectId(user_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    log_activity(current_user["id"], "user_deleted", {"user_id": user_id})
+    return {"message": "User deleted"}
+
+# ========================
+# Server Groups Endpoints
+# ========================
+
+@app.get("/api/server-groups")
+async def list_server_groups(current_user: dict = Depends(get_current_user)):
+    groups = list(server_groups_collection.find())
+    result = []
+    for g in groups:
+        count = servers_collection.count_documents({"group_id": str(g["_id"])})
+        result.append({
+            "id": str(g["_id"]),
+            "name": g["name"],
+            "description": g.get("description"),
+            "color": g.get("color", "#22C55E"),
+            "server_count": count
+        })
+    return result
+
+@app.post("/api/server-groups", response_model=ServerGroupResponse)
+async def create_server_group(group: ServerGroupBase, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] == "readonly":
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    group_data = group.model_dump()
+    result = server_groups_collection.insert_one(group_data)
+    
+    return {
+        "id": str(result.inserted_id),
+        "name": group.name,
+        "description": group.description,
+        "color": group.color,
+        "server_count": 0
+    }
+
+# ========================
+# Agent API Endpoints
+# ========================
+
+@app.post("/api/agents/register")
+async def register_agent(request: AgentRegisterRequest):
+    # Find or create server
+    server = servers_collection.find_one({"ip_address": request.ip_address})
+    
+    api_key = secrets.token_urlsafe(32)
+    
+    if server:
+        servers_collection.update_one(
+            {"_id": server["_id"]},
+            {
+                "$set": {
+                    "hostname": request.hostname,
+                    "os_type": request.os_type,
+                    "os_version": request.os_version,
+                    "api_key": api_key,
+                    "status": "online",
+                    "last_seen": datetime.now(timezone.utc).isoformat()
+                }
+            }
+        )
+        return {"api_key": api_key, "server_id": str(server["_id"])}
+    else:
+        server_data = {
+            "hostname": request.hostname,
+            "ip_address": request.ip_address,
+            "os_type": request.os_type,
+            "os_version": request.os_version,
+            "api_key": api_key,
+            "status": "online",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_seen": datetime.now(timezone.utc).isoformat()
+        }
+        result = servers_collection.insert_one(server_data)
+        return {"api_key": api_key, "server_id": str(result.inserted_id)}
+
+@app.post("/api/agents/metrics")
+async def receive_metrics(request: AgentMetricsRequest):
+    # Verify API key
+    server = servers_collection.find_one({"api_key": request.api_key})
+    if not server:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    metrics = request.metrics.model_dump()
+    metrics["timestamp"] = datetime.now(timezone.utc).isoformat()
+    
+    # Store in history
+    server_metrics_collection.insert_one(metrics)
+    
+    # Update current metrics
+    servers_collection.update_one(
+        {"_id": server["_id"]},
+        {
+            "$set": {
+                "metrics": metrics,
+                "status": "online",
+                "last_seen": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    # Emit via WebSocket
+    await sio.emit('metrics_update', {
+        "server_id": str(server["_id"]),
+        "metrics": metrics
+    })
+    
+    return {"status": "ok"}
+
+@app.post("/api/agents/heartbeat")
+async def agent_heartbeat(api_key: str):
+    server = servers_collection.find_one({"api_key": api_key})
+    if not server:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    servers_collection.update_one(
+        {"_id": server["_id"]},
+        {"$set": {"status": "online", "last_seen": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    return {"status": "ok"}
+
+@app.get("/api/agents/commands/{server_id}")
+async def get_agent_commands(server_id: str, api_key: str):
+    server = servers_collection.find_one({"_id": ObjectId(server_id), "api_key": api_key})
+    if not server:
+        raise HTTPException(status_code=401, detail="Invalid API key or server")
+    
+    # Get pending commands for this server
+    commands = list(db["agent_commands"].find(
+        {"server_id": server_id, "status": "pending"},
+        {"_id": 0}
+    ))
+    
+    return commands
+
+@app.post("/api/agents/command-result")
+async def agent_command_result(api_key: str, command_id: str, result: dict):
+    server = servers_collection.find_one({"api_key": api_key})
+    if not server:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    db["agent_commands"].update_one(
+        {"command_id": command_id},
+        {"$set": {"status": "completed", "result": result, "completed_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    return {"status": "ok"}
+
+# ========================
+# Dashboard Stats Endpoint
+# ========================
+
+@app.get("/api/dashboard/stats")
+async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+    total_servers = servers_collection.count_documents({})
+    online_servers = servers_collection.count_documents({"status": "online"})
+    offline_servers = servers_collection.count_documents({"status": "offline"})
+    total_updates = updates_collection.count_documents({})
+    
+    return {
+        "total_servers": total_servers,
+        "online_servers": online_servers,
+        "offline_servers": offline_servers,
+        "unknown_servers": total_servers - online_servers - offline_servers,
+        "total_updates_available": total_updates,
+        "total_tasks": tasks_collection.count_documents({}),
+        "total_users": users_collection.count_documents({})
+    }
+
+@app.get("/api/activity-logs")
+async def get_activity_logs(
+    limit: int = 20,
+    current_user: dict = Depends(get_current_user)
+):
+    logs = list(activity_logs_collection.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(limit))
+    return logs
+
+# ========================
+# IP Overview Endpoint
+# ========================
+
+@app.get("/api/ip-overview")
+async def get_ip_overview(current_user: dict = Depends(get_current_user)):
+    servers = list(servers_collection.find({}, {"_id": 1, "hostname": 1, "ip_address": 1, "status": 1, "os_type": 1}))
+    return [{
+        "id": str(s["_id"]),
+        "hostname": s["hostname"],
+        "ip_address": s["ip_address"],
+        "status": s.get("status", "unknown"),
+        "os_type": s.get("os_type", "unknown")
+    } for s in servers]
+
+# ========================
+# Health Check
+# ========================
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+# ========================
+# Socket.IO Events
+# ========================
+
+@sio.event
+async def connect(sid, environ):
+    print(f"Client connected: {sid}")
+
+@sio.event
+async def disconnect(sid):
+    print(f"Client disconnected: {sid}")
+
+@sio.event
+async def subscribe_server(sid, data):
+    server_id = data.get("server_id")
+    if server_id:
+        await sio.enter_room(sid, f"server_{server_id}")
+
+@sio.event
+async def unsubscribe_server(sid, data):
+    server_id = data.get("server_id")
+    if server_id:
+        await sio.leave_room(sid, f"server_{server_id}")
+
+# ========================
+# Run with Socket.IO
+# ========================
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(socket_app, host="0.0.0.0", port=8001)
