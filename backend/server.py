@@ -517,6 +517,38 @@ class AgentMetricsRequest(BaseModel):
     api_key: str
     metrics: MetricsData
 
+# Alert Models
+class AlertRuleCreate(BaseModel):
+    name: str
+    metric_type: str  # cpu, memory, disk, server_offline
+    comparison: str = "gt"  # gt, lt, eq
+    threshold: float = 90.0
+    severity: str = "warning"  # info, warning, critical
+    server_ids: List[str] = []  # Empty = all servers
+    enabled: bool = True
+
+class AlertRuleUpdate(BaseModel):
+    name: Optional[str] = None
+    metric_type: Optional[str] = None
+    comparison: Optional[str] = None
+    threshold: Optional[float] = None
+    severity: Optional[str] = None
+    server_ids: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+class SMTPConfigUpdate(BaseModel):
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_user: str
+    smtp_password: str
+    smtp_from: str
+    alert_email_to: str
+
+# SSH Terminal Models
+class SSHConnectRequest(BaseModel):
+    username: str
+    password: str
+
 # ========================
 # Helper Functions
 # ========================
