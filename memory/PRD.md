@@ -44,23 +44,43 @@
 - [x] Dashboard statistics
 - [x] IP overview endpoint
 - [x] Agent registration/metrics API
+- [x] **NEW: RDP file generation for Windows**
+- [x] **NEW: Hardware information endpoint**
+- [x] **NEW: Detailed disk info with SMART data**
+- [x] **NEW: Extended server info with last update time**
 
 #### Frontend Pages
 - [x] Login page with server room background
 - [x] Dashboard with stats cards and server overview
 - [x] Server list with search/filter/bulk actions
-- [x] Server detail with 8 tabs (Overview, Monitoring, Packages, Updates, Processes, Logs, Tasks, Docs)
-- [x] Tasks page with scheduler
+- [x] Server detail with tabs:
+  - Overview (with Live/Last Update indicator)
+  - **NEW: Hardware tab** (CPU, Memory with slots, Motherboard, Network)
+  - **NEW: Disks tab** (individual disks with serial, SMART data, partitions)
+  - Monitoring (charts)
+  - Packages
+  - Updates
+  - Processes
+  - Logs
+  - Documentation
+- [x] Tasks page with scheduler (properly displaying schedule info)
 - [x] User management page
 - [x] IP Overview with CSV export
 - [x] Settings page
+- [x] **NEW: RDP button for Windows servers**
+- [x] **NEW: SSH button for Linux servers**
 
-#### Agents
-- [x] Linux agent (Python) with install.sh
-- [x] Windows agent (Python) with install.ps1
-- [x] Metrics collection (CPU, RAM, Disk, Network, Processes)
-- [x] Command execution support
-- [x] Package scanning support
+#### Agents (Updated 2026-02-03)
+- [x] Linux agent with enhanced hardware collection
+  - CPU model, cores, threads, frequency
+  - RAM details with slots (via dmidecode)
+  - Motherboard info
+  - Network interfaces with speed
+  - **Disk serial numbers** (via hdparm, lsblk, udevadm)
+  - **SMART data** (via smartmontools)
+  - Auto-install smartmontools if missing
+- [x] Windows agent with hardware collection
+- [x] Installation scripts for both platforms
 
 ### Phase 2 - Agent System (COMPLETED)
 - [x] Linux agent with systemd service
@@ -71,6 +91,7 @@
 
 ### Phase 3 - Additional Features (PARTIAL)
 - [x] IP Address Overview page
+- [ ] SSH Web Terminal (xterm.js integration)
 - [ ] Alert System (email notifications)
 - [ ] Backup/Restore configuration
 
@@ -79,42 +100,30 @@
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
-- [ ] SSH Web Terminal (xterm.js integration)
-- [ ] RDP file generation for Windows servers
+- [ ] SSH Web Terminal (xterm.js + WebSocket)
 - [ ] Real agent connectivity testing
+- [ ] Alert system for server offline
 
 ### P1 - High Priority
-- [ ] Alert system (email on server offline/high usage)
-- [ ] Metrics history graphs with more data points
+- [ ] Email alerts on high resource usage
 - [ ] Task execution results display
 - [ ] Bulk update installation
+- [ ] Metrics history persistence
 
 ### P2 - Medium Priority
 - [ ] Server groups management UI
 - [ ] Configuration backup/restore
-- [ ] PDF export for IP overview
 - [ ] Dark/Light theme toggle
 
 ### P3 - Nice to Have
 - [ ] Mobile app (React Native)
 - [ ] Slack/Discord notifications
-- [ ] API rate limiting visualization
-- [ ] Custom dashboard widgets
-
----
-
-## Next Tasks
-1. Test agents on real Linux/Windows servers
-2. Implement SSH terminal with xterm.js
-3. Add email alert system (SMTP configuration)
-4. Enhance metrics history with longer retention
-5. Create user guide documentation
 
 ---
 
 ## Default Credentials
 - **Email**: admin@nexuscommand.local
-- **Password**: Check backend logs on first start (randomly generated)
+- **Password**: Check backend logs on first start
 
 ## Demo Servers (Seeded)
 - demo-server (Linux, Ubuntu 22.04)
