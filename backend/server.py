@@ -1944,20 +1944,60 @@ async def delete_alert_rule(rule_id: str, current_user: dict = Depends(get_curre
 # SMTP Configuration
 # ========================
 
+# Collection for SMTP settings (stored in DB instead of .env for dynamic config)
+smtp_config_collection = db["smtp_config"]
+
+def get_smtp_config():
+    """Get SMTP configuration from database or fallback to env"""
+    config = smtp_config_collection.find_one({}, {"_id": 0})
+    if config:
+        return config
+    return {
+        "smtp_host": settings.SMTP_HOST,
+        "smtp_port": settings.SMTP_PORT,
+        "smtp_user": settings.SMTP_USER,
+        "smtp_password": settings.SMTP_PASSWORD,
+        "smtp_from": settings.SMTP_FROM,
+        "alert_email_to": settings.ALERT_EMAIL_TO
+    }
+
 @app.get("/api/settings/smtp")
 async def get_smtp_settings(current_user: dict = Depends(get_current_user)):
     """Get SMTP configuration (admin only)"""
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     
+    config = get_smtp_config()
     return {
-        "smtp_host": settings.SMTP_HOST,
-        "smtp_port": settings.SMTP_PORT,
-        "smtp_user": settings.SMTP_USER,
-        "smtp_from": settings.SMTP_FROM,
-        "alert_email_to": settings.ALERT_EMAIL_TO,
-        "configured": bool(settings.SMTP_HOST)
+        "smtp_host": config.get("smtp_host", ""),
+        "smtp_port": config.get("smtp_port", 587),
+        "smtp_user": config.get("smtp_user", ""),
+        "smtp_from": config.get("smtp_from", ""),
+        "alert_email_to": config.get("alert_email_to", ""),
+        "configured": bool(config.get("smtp_host"))
     }
+
+@app.post("/api/settings/smtp")
+async def save_smtp_settings(config: SMTPConfigUpdate, current_user: dict = Depends(get_current_user)):
+    """Save SMTP configuration (admin only)"""
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    config_data = {
+        "smtp_host": config.smtp_host,
+        "smtp_port": config.smtp_port,
+        "smtp_user": config.smtp_user,
+        "smtp_password": config.smtp_password,
+        "smtp_from": config.smtp_from,
+        "alert_email_to": config.alert_email_to,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": current_user["id"]
+    }
+    
+    smtp_config_collection.replace_one({}, config_data, upsert=True)
+    log_activity(current_user["id"], "smtp_config_updated", {"smtp_host": config.smtp_host})
+    
+    return {"message": "SMTP configuration saved"}
 
 @app.post("/api/settings/smtp/test")
 async def test_smtp_settings(current_user: dict = Depends(get_current_user)):
@@ -1965,22 +2005,24 @@ async def test_smtp_settings(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     
-    if not settings.SMTP_HOST or not settings.ALERT_EMAIL_TO:
+    config = get_smtp_config()
+    
+    if not config.get("smtp_host") or not config.get("alert_email_to"):
         raise HTTPException(status_code=400, detail="SMTP not configured")
     
     try:
         msg = MIMEMultipart()
-        msg['From'] = settings.SMTP_FROM or settings.SMTP_USER
-        msg['To'] = settings.ALERT_EMAIL_TO
+        msg['From'] = config.get("smtp_from") or config.get("smtp_user")
+        msg['To'] = config.get("alert_email_to")
         msg['Subject'] = "[Nexus Command] Test Email"
         
         body = "This is a test email from Nexus Command. If you received this, your SMTP configuration is working correctly."
         msg.attach(MIMEText(body, 'plain'))
         
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+        with smtplib.SMTP(config.get("smtp_host"), config.get("smtp_port", 587)) as server:
             server.starttls()
-            if settings.SMTP_USER and settings.SMTP_PASSWORD:
-                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            if config.get("smtp_user") and config.get("smtp_password"):
+                server.login(config.get("smtp_user"), config.get("smtp_password"))
             server.send_message(msg)
         
         return {"message": "Test email sent successfully"}
