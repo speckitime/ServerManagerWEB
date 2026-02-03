@@ -180,17 +180,9 @@ clone_repository() {
         cd "$NEXUS_HOME/app"
         git pull origin main > /dev/null 2>&1 || true
     else
-        # If using local files instead of git
-        mkdir -p "$NEXUS_HOME/app"
-        
-        # Copy application files (adjust paths as needed)
-        if [[ -d "/app" ]]; then
-            cp -r /app/backend "$NEXUS_HOME/app/"
-            cp -r /app/frontend "$NEXUS_HOME/app/"
-            cp -r /app/agents "$NEXUS_HOME/app/" 2>/dev/null || true
-        else
-            log_error "Application files not found. Please clone the repository manually."
-        fi
+        mkdir -p "$NEXUS_HOME"
+        cd "$NEXUS_HOME"
+        git clone "$NEXUS_REPO" app
     fi
 
     chown -R "$NEXUS_USER:$NEXUS_USER" "$NEXUS_HOME"
